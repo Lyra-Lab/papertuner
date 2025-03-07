@@ -26,8 +26,8 @@ Perfect for creating domain-specific datasets to fine-tune LLMs on scientific li
 git clone https://github.com/yourusername/papertuner.git
 cd papertuner
 
-# Install the package
-pip install -e .
+# Install the package using uv
+uv pip install -e .
 ```
 
 ## Requirements
@@ -115,6 +115,18 @@ print(dataset)
 print(dataset.column_names)
 print(dataset[0]["title"])
 print(dataset[0]["summary"])
+```
+
+## Installing Dependencies with uv
+
+If you prefer using [uv](https://github.com/astral-sh/uv) for Python package management:
+
+```bash
+# Install required dependencies
+uv pip install arxiv datasets ollama pdf2image pillow requests tqdm
+
+# Install for development
+uv pip install --dev pytest black isort mypy
 ```
 
 ## Configuration Options

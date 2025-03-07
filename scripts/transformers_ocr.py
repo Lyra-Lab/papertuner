@@ -78,7 +78,7 @@ except ImportError:
     subprocess.check_call(["pip", "install", "datasets"])
     import datasets
 
-# Get HuggingFace token from environment
+# Get HuggingFace token from environment (OPTIONAL - only needed for gated models or pushing to Hub)
 huggingface_token = os.environ.get("HF_TOKEN")
 
 # Determine if we should push to HuggingFace Hub
@@ -87,21 +87,23 @@ if args.hub_dataset_name and not huggingface_token:
     logger.warning("HF_TOKEN environment variable not set but hub_dataset_name provided. Will not push to HuggingFace Hub.")
 
 # Create a pipeline with the HuggingFace Transformers OCR
+# Note: No need for Mistral or Gemini API keys as we're using local transformers
 pipeline = DatasetPipeline(
     ocr_type="transformers",
     source_type="arxiv",
     formatter_type="huggingface",
+    # We don't need to pass any API key here, only the HF token if needed
     ocr_kwargs={
         "model_name": args.model_name,
         "device": args.device,
         "torch_dtype": args.torch_dtype,
         "max_length": args.max_length,
-        "use_auth_token": huggingface_token  # Pass token for accessing gated models
+        "use_auth_token": huggingface_token  # Optional: only needed for gated models
     },
     formatter_kwargs={
         "save_locally": True,
         "push_to_hub": push_to_hub,
-        "hub_token": huggingface_token,
+        "hub_token": huggingface_token,  # Optional: only needed for pushing to Hub
         "hub_dataset_name": args.hub_dataset_name if args.hub_dataset_name else None
     },
     retry_failed=True,
@@ -113,6 +115,8 @@ pipeline = DatasetPipeline(
 if torch.cuda.is_available():
     logger.info(f"CUDA is available: {torch.cuda.get_device_name(0)}")
     logger.info(f"CUDA memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+else:
+    logger.info("CUDA is not available, using CPU. This might be slow for large models.")
 
 # Generate the dataset
 try:

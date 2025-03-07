@@ -1,6 +1,6 @@
 """Factory for creating OCR instances."""
 
-from typing import Dict, Type, Any, Optional
+from typing import Any
 from .base import BaseOCR
 from .mistral import MistralOCR
 
@@ -39,9 +39,8 @@ def create_ocr(ocr_type: str, **kwargs: Any) -> BaseOCR:
         ImportError: If the OCR implementation requires unavailable dependencies
     """
     # Build OCR map dynamically based on available implementations
-    ocr_map = {
-        "mistral": MistralOCR,
-    }
+    ocr_map = {}
+    ocr_map["mistral"] = MistralOCR
 
     if GEMINI_AVAILABLE:
         ocr_map["gemini"] = GeminiOCR
@@ -58,6 +57,15 @@ def create_ocr(ocr_type: str, **kwargs: Any) -> BaseOCR:
         raise ValueError(f"Unsupported OCR type: {ocr_type}. Available types: {available_types}")
 
     try:
+        # Check for required API keys based on OCR type
+        if ocr_type == "mistral" and "api_key" not in kwargs and "MISTRAL_API_KEY" not in os.environ:
+            raise ValueError("Mistral API key is required. Set it via the api_key parameter or MISTRAL_API_KEY environment variable.")
+
+        if ocr_type == "gemini" and "api_key" not in kwargs and "GOOGLE_API_KEY" not in os.environ:
+            raise ValueError("Google API key is required. Set it via the api_key parameter or GOOGLE_API_KEY environment variable.")
+
+        # No API key checks for transformers or ollama OCR types
+
         return ocr_map[ocr_type](**kwargs)
     except ImportError as e:
         raise ImportError(f"Missing dependencies for OCR type '{ocr_type}': {e}")

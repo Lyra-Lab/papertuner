@@ -1,21 +1,9 @@
 from .base import BaseOCR
-from .arxiv_integrated import ArxivIntegratedOCR
-from .mistral import MistralOCR
+from .ollama_ocr import OllamaOCR
 
-# Conditionally import other OCR implementations
-try:
-    from .gemini_ocr import GeminiOCR
-except ImportError:
-    pass
-
-try:
-    from .ollama_ocr import OllamaOCR
-except ImportError:
-    pass
-
-try:
-    from .hf_transformers_ocr import HFTransformersOCR
-except ImportError:
-    pass
-
-from .factory import create_ocr
+def create_ocr(ocr_type: str, **kwargs):
+    """Create an OCR instance."""
+    if ocr_type == "ollama":
+        return OllamaOCR(**kwargs)
+    else:
+        raise ValueError(f"Unsupported OCR type: {ocr_type}")

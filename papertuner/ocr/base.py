@@ -1,6 +1,6 @@
+# papertuner/papertuner/ocr/base.py
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
-
 
 class BaseOCR(ABC):
     """Base class for OCR implementations."""
@@ -13,4 +13,4 @@ class BaseOCR(ABC):
     @abstractmethod
     def process_file(self, file_path: str) -> str:
         """Process a document from a local file and return the extracted text."""
-        pass 
+        pass

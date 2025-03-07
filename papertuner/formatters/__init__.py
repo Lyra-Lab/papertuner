@@ -1,8 +1,9 @@
 from .base import BaseFormatter
-from .jsonl import JsonlFormatter
 from .huggingface import HuggingFaceFormatter
-from .csv_formatter import CSVFormatter
-from .yaml_formatter import YAMLFormatter
-from .chat_formatter import ChatFormatter
-from .template_formatter import TemplateFormatter
-from .factory import create_formatter
+
+def create_formatter(formatter_type: str, **kwargs):
+    """Create a formatter instance."""
+    if formatter_type == "huggingface":
+        return HuggingFaceFormatter(**kwargs)
+    else:
+        raise ValueError(f"Unsupported formatter type: {formatter_type}")

@@ -1,6 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Generator, Optional
-
+from typing import List, Dict, Any, Optional
 
 class BaseSource(ABC):
     """Base class for data sources."""
@@ -30,4 +29,4 @@ class BaseSource(ABC):
         Returns:
             URL to the PDF
         """
-        pass 
+        pass

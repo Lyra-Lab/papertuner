@@ -1,0 +1,14 @@
+{
+  "id": "http://arxiv.org/abs/1806.01756v1",
+  "title": "Concept-Oriented Deep Learning",
+  "authors": [
+    "Daniel T Chang"
+  ],
+  "abstract": "Concepts are the foundation of human deep learning, understanding, and\nknowledge integration and transfer. We propose concept-oriented deep learning\n(CODL) which extends (machine) deep learning with concept representations and\nconceptual understanding capability. CODL addresses some of the major\nlimitations of deep learning: interpretability, transferability, contextual\nadaptation, and requirement for lots of labeled training data. We discuss the\nmajor aspects of CODL including concept graph, concept representations, concept\nexemplars, and concept representation learning systems supporting incremental\nand continual learning.",
+  "text": "This document is a research paper proposing \"Concept-Oriented Deep Learning\" (CODL).  The core argument is that current deep learning methods suffer from limitations like poor interpretability, transferability, and reliance on massive labeled datasets because they lack the conceptual understanding inherent in human learning.\n\nThe paper introduces CODL as an extension of deep learning that incorporates:\n\n* **Concept Graphs:**  Utilizing existing knowledge bases like Microsoft Concept Graph to provide a structured representation of concepts and their relationships.\n* **Concept Representations:**  Learning feature representations that are semantically segmented and tied to specific concepts, instances, and attributes within the concept graph.  This moves beyond the \"blob\" of features in typical deep learning.\n* **Concept Exemplars:**  Using representative examples of concepts to aid in both supervised and unsupervised learning of concept representations, particularly helpful when labeled data is scarce.\n* **Concept Representation Learning Systems:**  Platforms and tools to support both supervised and unsupervised learning of concept representations, including techniques for incremental and continual learning.  The paper discusses methods to avoid \"catastrophic forgetting\" when adding new concepts.\n* **Basic-Level Concepts:** Focusing on learning representations for concepts at the basic level of abstraction in a taxonomy to maximize informativeness and distinctiveness.\n\n\nThe paper argues that by incorporating these concepts, CODL addresses the shortcomings of current deep learning approaches and moves closer to human-level learning abilities.  It provides a detailed explanation of each component of CODL, and discusses relevant existing work in deep learning, semantic segmentation, and incremental learning.  The paper concludes by summarizing the key contributions and suggesting future research directions.\n",
+  "categories": [
+    "cs.AI"
+  ],
+  "published": "2018-06-05",
+  "updated": "2018-06-05"
+}

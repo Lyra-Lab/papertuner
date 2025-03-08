@@ -1,0 +1,15 @@
+{
+  "id": "http://arxiv.org/abs/1908.02130v1",
+  "title": "Deep learning research landscape & roadmap in a nutshell: past, present and future -- Towards deep cortical learning",
+  "authors": [
+    "Aras R. Dargazany"
+  ],
+  "abstract": "The past, present and future of deep learning is presented in this work.\nGiven this landscape & roadmap, we predict that deep cortical learning will be\nthe convergence of deep learning & cortical learning which builds an artificial\ncortical column ultimately.",
+  "text": "This document is a research paper titled \"Deep learning research landscape & roadmap in a nutshell: past, present and future - Towards deep cortical learning\".  It provides a historical overview of deep learning, tracing its origins from early neural network models to the current state-of-the-art.  The paper highlights key milestones, influential researchers (like LeCun, Bengio, and Hinton), and major algorithmic developments.  It also discusses the future directions of deep learning, focusing on the convergence of deep learning and cortical learning to create what the author terms \"deep cortical learning\".  This future direction aims to create more biologically plausible and efficient deep learning models inspired by the structure and function of the neocortex.  The paper includes figures illustrating the timeline of deep learning's development and a roadmap outlining its future trajectory.\n",
+  "categories": [
+    "cs.NE",
+    "cs.LG"
+  ],
+  "published": "2019-07-30",
+  "updated": "2019-07-30"
+}

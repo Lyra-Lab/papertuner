@@ -5,28 +5,23 @@ setup(
     version="0.1.0",
     packages=find_packages(),
     install_requires=[
+        "requests",
         "arxiv",
         "datasets",
-        "ollama",
-        "pdf2image",
-        "pillow",
-        "requests",
+        "huggingface-hub",
+        "google-generativeai",
         "tqdm",
-        "PyPDF2",
+        "pyyaml"
     ],
-    extras_require={
-        "huggingface": [
-            "torch>=1.10.0",
-            "transformers>=4.25.0",
-        ],
-    },
-    description="A tool for creating fine-tuning datasets from scientific papers",
     author="Your Name",
     author_email="your.email@example.com",
+    description="A simple tool to generate datasets for fine-tuning LLMs from academic papers",
+    keywords="machine learning, dataset, arxiv, huggingface",
+    url="https://github.com/yourusername/papertuner",
     classifiers=[
+        "Development Status :: 3 - Alpha",
+        "Intended Audience :: Science/Research",
         "Programming Language :: Python :: 3",
         "License :: OSI Approved :: MIT License",
-        "Operating System :: OS Independent",
     ],
-    python_requires=">=3.8",
 )

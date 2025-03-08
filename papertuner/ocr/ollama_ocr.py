@@ -7,7 +7,7 @@ import requests
 from typing import Optional, Union, Dict, Any, List
 from pathlib import Path
 import io
-import json
+from tqdm import tqdm
 
 try:
     import ollama
@@ -16,7 +16,7 @@ except ImportError:
     OLLAMA_AVAILABLE = False
 
 try:
-    from pdf2image import convert_from_path, convert_from_bytes
+    from pdf2image import convert_from_path
     PDF2IMAGE_AVAILABLE = True
 except ImportError:
     PDF2IMAGE_AVAILABLE = False
@@ -29,8 +29,7 @@ except ImportError:
 
 from .base import BaseOCR
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Get logger
 logger = logging.getLogger(__name__)
 
 class OllamaOCR(BaseOCR):
@@ -77,22 +76,41 @@ class OllamaOCR(BaseOCR):
         self.max_tokens = max_tokens
         self.additional_params = kwargs
 
-        logger.info(f"Configuring Ollama to use host: {self.ollama_host}")
-
         # Configure the Ollama client
         ollama.host = self.ollama_host
 
+        logger.debug(f"OllamaOCR initialized with model={model_name}, host={self.ollama_host}")
+
     def process_url(self, url: str) -> str:
         """Process a document from a URL and return the extracted text."""
-        # Download the file
-        response = requests.get(url)
+        # Download the file with progress bar
+        logger.debug(f"Downloading PDF from URL: {url}")
+
+        # Stream the download with progress tracking
+        response = requests.get(url, stream=True)
         response.raise_for_status()
-        
-        # Create a temporary file
+
+        # Get total file size for progress bar
+        total_size = int(response.headers.get('content-length', 0))
+
+        # Use tqdm to show download progress
+        progress = tqdm(
+            total=total_size,
+            unit='B',
+            unit_scale=True,
+            desc="Downloading PDF",
+            leave=False
+        )
+
+        # Create a temporary file and download with progress
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as temp_file:
-            temp_file.write(response.content)
+            for chunk in response.iter_content(chunk_size=8192):
+                temp_file.write(chunk)
+                progress.update(len(chunk))
             temp_path = temp_file.name
-            
+
+        progress.close()
+
         try:
             # Process the local file
             return self.process_file(temp_path)
@@ -117,34 +135,54 @@ class OllamaOCR(BaseOCR):
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        # Convert PDF to images
-        logger.info(f"Converting PDF to images: {file_path}")
+        # Convert PDF to images with progress bar
+        logger.debug(f"Converting PDF to images: {file_path}")
         try:
-            images = convert_from_path(
-                file_path,
-                dpi=300,
-                fmt="jpeg",
-                grayscale=False,
-                transparent=False
-            )
-            logger.info(f"Converted PDF to {len(images)} images")
+            # First get page count for progress bar (if possible)
+            import PyPDF2
+            try:
+                with open(file_path, 'rb') as f:
+                    pdf = PyPDF2.PdfReader(f)
+                    total_pages = len(pdf.pages)
+                    pdf_desc = f"Converting {total_pages} PDF pages"
+            except:
+                pdf_desc = "Converting PDF"
+
+            # Convert with progress description
+            with tqdm(desc=pdf_desc, unit="page", leave=False) as pbar:
+                images = convert_from_path(
+                    file_path,
+                    dpi=300,
+                    fmt="jpeg",
+                    grayscale=False,
+                    transparent=False,
+                    thread_count=2,  # Use multiple threads for conversion
+                )
+                pbar.update(len(images))
+
+            logger.debug(f"Converted PDF to {len(images)} images")
         except Exception as e:
             logger.error(f"Error converting PDF to images: {e}")
             raise
 
         if not images:
-            raise ValueError(f"Failed to extract any images from the PDF: {file_path}")
+            raise ValueError(f"Failed to extract any images from the PDF")
 
         # Process the images in chunks to avoid overwhelming the model
         all_text = []
         chunk_size = min(5, len(images))  # Process max 5 pages at once
+        total_pages = len(images)
 
-        for i in range(0, len(images), chunk_size):
-            chunk_images = images[i:i+chunk_size]
-            logger.info(f"Processing pages {i+1}-{i+len(chunk_images)} of {len(images)}")
+        # Create progress bar for the OCR process
+        with tqdm(total=total_pages, desc="OCR processing", unit="page", leave=False) as ocr_pbar:
+            for i in range(0, total_pages, chunk_size):
+                chunk_images = images[i:i+chunk_size]
+                end_page = min(i+len(chunk_images), total_pages)
+                ocr_pbar.set_description(f"OCR pages {i+1}-{end_page}")
 
-            chunk_text = self._process_image_chunk(chunk_images, i)
-            all_text.append(chunk_text)
+                chunk_text = self._process_image_chunk(chunk_images, i)
+                all_text.append(chunk_text)
+                ocr_pbar.update(len(chunk_images))
 
         # Combine all extracted text
         return "\n\n".join(all_text)
@@ -161,52 +199,55 @@ class OllamaOCR(BaseOCR):
             Extracted text from the images
         """
         # Create a combined prompt with all images
-        prompt = f"Extract all text from these {len(images)} PDF pages ({start_page+1}-{start_page+len(images)}). Return only the extracted text content."
-
-        # Encode images to base64
-        image_prompts = []
-        for idx, img in enumerate(images):
-            with io.BytesIO() as output:
-                img.save(output, format="JPEG")
-                img_data = output.getvalue()
-                img_b64 = base64.b64encode(img_data).decode('utf-8')
-                image_prompts.append(f"data:image/jpeg;base64,{img_b64}")
-
-        # Create the message list
-        messages = [
-            {"role": "system", "content": "You are an expert OCR system designed to accurately extract text from PDF images."},
-            {"role": "user", "content": [
-                {"type": "text", "text": prompt}
-            ]}
-        ]
-
-        # Add the images to the user message
-        for img_data in image_prompts:
-            messages[1]["content"].append({"type": "image", "image": img_data})
+        prompt = f"Extract all text from these {len(images)} PDF pages. Return only the extracted text content."
 
         # Try to call the model with retries
         for attempt in range(self.max_retries):
             try:
-                logger.info(f"Calling Ollama model (attempt {attempt+1}/{self.max_retries})")
+                # Create a direct call to the Ollama API for each image
+                responses = []
 
-                response = ollama.chat(
-                    model=self.model_name,
-                    messages=messages,
-                    options={
-                        "temperature": self.temperature,
-                        "num_predict": self.max_tokens,
-                    }
-                )
+                # Process each image individually with progress
+                progress_desc = f"Processing {len(images)} images"
+                for idx, img in enumerate(tqdm(images, desc=progress_desc, leave=False)):
+                    # Convert image to base64
+                    with io.BytesIO() as output:
+                        img.save(output, format="JPEG")
+                        img_data = output.getvalue()
+                        img_b64 = base64.b64encode(img_data).decode('utf-8')
 
-                if response and "content" in response:
-                    return response["content"]
+                    # Call the API directly for each image
+                    response = ollama.generate(
+                        model=self.model_name,
+                        prompt=f"Page {start_page + idx + 1}: {prompt}",
+                        images=[img_b64],
+                        options={
+                            "temperature": self.temperature,
+                            "num_predict": self.max_tokens,
+                        }
+                    )
+
+                    if response and "response" in response:
+                        responses.append(response["response"])
+                    else:
+                        logger.warning(f"Empty response from Ollama for page {start_page + idx + 1}")
+
+                # Combine responses
+                if responses:
+                    combined_text = "\n\n".join(responses)
+                    return combined_text
                 else:
-                    logger.warning(f"Empty or invalid response from Ollama: {response}")
+                    logger.warning("No text extracted from any page in this chunk")
 
             except Exception as e:
-                logger.warning(f"Error on attempt {attempt+1}: {e}")
                 if attempt < self.max_retries - 1:
-                    time.sleep(self.retry_delay)
+                    backoff_time = self.retry_delay * (attempt + 1)  # Increase delay with each retry
+                    logger.debug(f"Error on attempt {attempt+1}: {str(e)}. Retrying in {backoff_time}s")
+                    # Show retry progress
+                    for _ in tqdm(range(int(backoff_time)), desc=f"Retry {attempt+1}/{self.max_retries-1}", leave=False):
+                        time.sleep(1)
+                else:
+                    logger.error(f"Failed after {self.max_retries} attempts: {str(e)}")
 
         # If all attempts fail, raise an exception
         raise RuntimeError(f"Failed to process images after {self.max_retries} attempts")

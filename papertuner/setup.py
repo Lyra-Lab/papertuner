@@ -12,7 +12,14 @@ setup(
         "pillow",
         "requests",
         "tqdm",
+        "PyPDF2",
     ],
+    extras_require={
+        "huggingface": [
+            "torch>=1.10.0",
+            "transformers>=4.25.0",
+        ],
+    },
     description="A tool for creating fine-tuning datasets from scientific papers",
     author="Your Name",
     author_email="your.email@example.com",

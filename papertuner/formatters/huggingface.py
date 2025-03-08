@@ -3,8 +3,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from .base import BaseFormatter
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Get logger
 logger = logging.getLogger(__name__)
 
 try:
@@ -42,6 +41,8 @@ class HuggingFaceFormatter(BaseFormatter):
             if not self.hub_token:
                 raise ValueError("hub_token or HF_TOKEN environment variable is required when push_to_hub is True")
 
+        logger.debug(f"HuggingFaceFormatter initialized: save_locally={save_locally}, push_to_hub={push_to_hub}")
+
     def format_entry(self, paper_metadata: Dict[str, Any], text: str) -> Dict[str, Any]:
         """Format a single paper entry for the dataset."""
         # Format date as string if it's a datetime object
@@ -72,13 +73,15 @@ class HuggingFaceFormatter(BaseFormatter):
 
         # Create the dataset
         dataset = datasets.Dataset.from_dict(dataset_dict)
+        logger.debug(f"Created dataset with {len(entries)} entries and {len(dataset_dict)} columns")
 
         # Save locally if requested
         if self.save_locally:
             dataset.save_to_disk(output_path)
-            logger.info(f"Dataset saved locally to {output_path}")
+            logger.debug(f"Dataset saved locally to {output_path}")
 
         # Push to HuggingFace Hub if requested
         if self.push_to_hub:
+            logger.debug(f"Pushing dataset to HuggingFace Hub: {self.hub_dataset_name}")
             dataset.push_to_hub(self.hub_dataset_name, token=self.hub_token)
-            logger.info(f"Dataset pushed to HuggingFace Hub: {self.hub_dataset_name}")
+            logger.debug(f"Dataset successfully pushed to HuggingFace Hub")

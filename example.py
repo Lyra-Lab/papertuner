@@ -3,7 +3,7 @@ Example script to generate a dataset on machine learning papers using PaperTuner
 
 This script:
 1. Searches for machine learning papers on ArXiv
-2. Extracts text using Ollama's vision-capable model
+2. Extracts text using a HuggingFace vision-language model
 3. Creates a HuggingFace dataset
 """
 
@@ -18,15 +18,15 @@ logger = logging.getLogger(__name__)
 def main():
     # Initialize the pipeline
     pipeline = DatasetPipeline(
-        ocr_type="ollama",
+        ocr_type="huggingface",
         source_type="arxiv",
         formatter_type="huggingface",
         ocr_kwargs={
-            "model_name": "granite3.2-vision:latest",  # Using llava for vision capabilities
-            # Change host if Ollama is running elsewhere
-            "ollama_host": "http://localhost:11434",
+            "model_name": "ibm-granite/granite-vision-3.2-2b",  # Using IBM Granite vision model
+            "device": "cuda",  # Use GPU if available
+            "max_new_tokens": 4096,  # Maximum tokens to generate per image
             "temperature": 0.1,  # Low temperature for more deterministic outputs
-            "max_tokens": 16384,  # Allow for longer outputs
+            "do_sample": False,  # Greedy decoding for OCR (more accurate)
         },
         source_kwargs={
             "max_results": 100,  # Maximum number of papers to search
@@ -51,6 +51,7 @@ def main():
         query=query,
         output_path=output_path,
         max_papers=max_papers,
+        verbose=True  # Show detailed progress
     )
 
     # Print summary

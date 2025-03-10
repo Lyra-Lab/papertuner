@@ -12,6 +12,7 @@ import shutil
 import time
 from urllib.parse import urlparse
 from pathlib import Path
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -41,17 +42,20 @@ class ArxivClient(SourceClient):
 
         if not self.queries and not self.categories:
             raise ValueError("At least one query or category must be provided")
+        # Suppress arxiv logs to the level above WARNING
+        logging.getLogger('arxiv').setLevel(logging.WARNING)
+
 
     def fetch_papers(self):
         """
         Fetch papers from arXiv based on queries and categories.
 
         Returns:
-            list: List of dictionaries containing paper metadata and local PDF path
+            tuple: (list of paper dictionaries, temp_dir path)
         """
         papers = []
         temp_dir = tempfile.mkdtemp(prefix="papertuner_")
-        
+
         try:
             for query in self.queries:
                 logger.info(f"Fetching papers for query: {query}")
@@ -68,11 +72,11 @@ class ArxivClient(SourceClient):
                     sort_by=arxiv.SortCriterion.Relevance
                 )
 
-                for i, result in enumerate(search.results()):
+                for i, result in enumerate(tqdm(search.results(), desc=f"Fetching papers for query: {query}")):
                     # Add a small delay every few requests to avoid rate limiting
                     if i > 0 and i % 5 == 0:
                         time.sleep(1)
-                        
+
                     # Download the PDF
                     pdf_path = self._download_pdf(result.pdf_url, temp_dir)
 
@@ -90,10 +94,12 @@ class ArxivClient(SourceClient):
                         })
 
             logger.info(f"Fetched {len(papers)} papers")
-            return papers
-        finally:
-            # Clean up the temporary directory
+            return papers, temp_dir
+        except Exception as e:
+            # Clean up the temporary directory on error
             shutil.rmtree(temp_dir, ignore_errors=True)
+            logger.error(f"Error fetching papers: {e}")
+            raise
 
     def _download_pdf(self, url, temp_dir):
         """
@@ -118,15 +124,19 @@ class ArxivClient(SourceClient):
             file_path = os.path.join(temp_dir, file_name)
 
             # Download the file
-            response = requests.get(url, stream=True)
+            response = requests.get(url, stream=True, timeout=30)
             response.raise_for_status()
 
             with open(file_path, 'wb') as file:
                 for chunk in response.iter_content(chunk_size=8192):
-                    file.write(chunk)
+                    if chunk:  # filter out keep-alive new chunks
+                        file.write(chunk)
 
             return file_path
 
-        except Exception as e:
+        except requests.exceptions.RequestException as e:
             logger.error(f"Error downloading PDF from {url}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error downloading PDF from {url}: {e}")
             return None

@@ -1,5 +1,0 @@
-requests
-arxiv
-datasets
-huggingface-hub
-google-generativeai

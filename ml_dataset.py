@@ -2,35 +2,29 @@
 Example usage of the PaperTuner library.
 """
 
-from papertuner.ocr import GeminiOCR
+from papertuner import setup_logging
+from papertuner.ocr import GeminiOCR, PyMuPDFOCR
 from papertuner.sources import ArxivClient
 from papertuner.data import HGDataset
 import os
 import logging
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-
 def main():
-    # Get API keys from environment variables
-    gemini_api_key = os.environ.get("GEMINI_API_KEY")
-    hf_token = os.environ.get("HF_TOKEN")
+    # Configure logging
+    setup_logging(logging.INFO)
 
-    if not gemini_api_key:
-        raise ValueError("GEMINI_API_KEY environment variable is required")
+    # Get API keys from environment variables
+    hf_token = os.environ.get("HF_TOKEN")
 
     if not hf_token:
         logging.warning("HF_TOKEN environment variable is not set. Dataset upload will not be available.")
 
     # Initialize OCR
-    gemini_ocr = GeminiOCR(gemini_api_key, hf_token)
+    ocr = PyMuPDFOCR()
 
     # Initialize ArXiv client
     client = ArxivClient(
-        max_papers=100,
+        max_papers=500,
         queries=[
             "deep learning",
             "natural language processing",
@@ -52,7 +46,7 @@ def main():
         output_path="temp",
         save_to_disk=True,
         client=client,
-        ocr=gemini_ocr
+        ocr=ocr
     )
 
 if __name__ == "__main__":

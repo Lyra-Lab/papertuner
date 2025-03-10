@@ -11,7 +11,9 @@ setup(
         "huggingface-hub",
         "google-generativeai",
         "tqdm",
-        "pyyaml"
+        "pyyaml",
+        "PyMuPDF",  # Adding PyMuPDF to the install_requires list
+        "fitz"
     ],
     author="Your Name",
     author_email="your.email@example.com",

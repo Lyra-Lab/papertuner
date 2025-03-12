@@ -26,4 +26,10 @@ streamlit>=1.22.0
 # Development tools
 black>=23.3.0
 isort>=5.12.0
-pytest>=7.3.1 
+pytest>=7.3.1
+
+# Add to requirements.txt for GRPO training
+unsloth>=0.3.0
+vllm>=0.2.0
+triton==3.1.0
+pynvml>=11.0.0

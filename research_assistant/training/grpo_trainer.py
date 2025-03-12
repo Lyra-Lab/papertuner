@@ -3,12 +3,15 @@ GRPO (Generative Reinforcement from Preference Optimization) trainer implementat
 using Unsloth for efficient fine-tuning.
 """
 
+# Import unsloth first
+import unsloth
+from unsloth import FastLanguageModel, is_bfloat16_supported
+
 import os
 import re
 from pathlib import Path
 
 import torch
-from unsloth import FastLanguageModel, is_bfloat16_supported
 from trl import GRPOConfig, GRPOTrainer
 from datasets import Dataset
 from vllm import SamplingParams

@@ -41,4 +41,4 @@ MIXED_PRECISION = "fp16"  # or "no" for full precision
 
 # Weights & Biases settings
 WANDB_PROJECT = "research-assistant"
-WANDB_ENTITY = "denissud"  # Set to your username or organization 
+WANDB_ENTITY = "denissud-msu"  # Set to your username or organization 

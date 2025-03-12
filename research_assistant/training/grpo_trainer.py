@@ -207,15 +207,54 @@ class ResearchGRPOTrainer:
         
         return self.model, results
     
-    def save_model(self, save_path=None):
+    def save_model(self, save_path=None, save_method="lora", push_to_hub=False, hub_path="hf/model", token=""):
         """
-        Save the trained model.
+        Save the trained model with different methods.
         
         Args:
             save_path (str): Path to save the model
+            save_method (str): Method to save the model ('merged_16bit', 'merged_4bit', 'lora', 'gguf_8bit', 'gguf_16bit', 'gguf_q4_k_m')
+            push_to_hub (bool): Whether to push the model to the Hugging Face Hub
+            hub_path (str): Path on the Hugging Face Hub
+            token (str): Token for authentication on the Hugging Face Hub
         """
         save_path = save_path or os.path.join(self.output_dir, "final_lora")
-        self.model.save_lora(save_path)
+        
+        if save_method == "merged_16bit":
+            self.model.save_pretrained_merged(save_path, self.tokenizer, save_method="merged_16bit")
+            if push_to_hub:
+                self.model.push_to_hub_merged(hub_path, self.tokenizer, save_method="merged_16bit", token=token)
+        elif save_method == "merged_4bit":
+            self.model.save_pretrained_merged(save_path, self.tokenizer, save_method="merged_4bit")
+            if push_to_hub:
+                self.model.push_to_hub_merged(hub_path, self.tokenizer, save_method="merged_4bit", token=token)
+        elif save_method == "lora":
+            self.model.save_pretrained_merged(save_path, self.tokenizer, save_method="lora")
+            if push_to_hub:
+                self.model.push_to_hub_merged(hub_path, self.tokenizer, save_method="lora", token=token)
+        elif save_method == "gguf_8bit":
+            self.model.save_pretrained_gguf(save_path, self.tokenizer)
+            if push_to_hub:
+                self.model.push_to_hub_gguf(hub_path, self.tokenizer, token=token)
+        elif save_method == "gguf_16bit":
+            self.model.save_pretrained_gguf(save_path, self.tokenizer, quantization_method="f16")
+            if push_to_hub:
+                self.model.push_to_hub_gguf(hub_path, self.tokenizer, quantization_method="f16", token=token)
+        elif save_method == "gguf_q4_k_m":
+            self.model.save_pretrained_gguf(save_path, self.tokenizer, quantization_method="q4_k_m")
+            if push_to_hub:
+                self.model.push_to_hub_gguf(hub_path, self.tokenizer, quantization_method="q4_k_m", token=token)
+        elif save_method == "gguf_multiple":
+            if push_to_hub:
+                self.model.push_to_hub_gguf(
+                    hub_path,
+                    self.tokenizer,
+                    quantization_method=["q4_k_m", "q8_0", "q5_k_m"],
+                    token=token
+                )
+        else:
+            raise ValueError(f"Unsupported save method: {save_method}\nSupported methods: merged_16bit, merged_4bit, lora, gguf_8bit, gguf_16bit, gguf_q4_k_m, gguf_multiple")
+        
         return save_path
     
     def generate(self, prompt, lora_path=None, temperature=0.8, top_p=0.95, max_tokens=1024):

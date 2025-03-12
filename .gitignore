@@ -1,8 +1,46 @@
+# Python cache files
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*$py.class
+
+# Environment and package management
 .env
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+*.egg-info/
+dist/
+build/
+eggs/
+
+# Editor settings
 .vscode/
 .idea/
+*.swp
+*.swo
+
+# OS specific files
 .DS_Store
-.venv/m
+Thumbs.db
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# ML specific
+*.pt
+*.pth
+*.onnx
+*.h5
+
+# Logs and local data
+logs/
+*.log
+wandb/
+outputs/
+runs/
+
+# Local configuration
+config_local.py

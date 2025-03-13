@@ -49,7 +49,7 @@ def main():
     
     # Load and prepare the dataset
     print(f"Loading dataset from {args.dataset}")
-    raw_dataset = load_dataset(args.dataset)
+    raw_dataset = load_dataset(args.dataset, "main")
     
     # Process dataset if needed
     if all(col in raw_dataset["train"].features for col in ["problem", "literature", "hypothesis", "methodology"]):

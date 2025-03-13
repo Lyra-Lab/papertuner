@@ -83,7 +83,8 @@ class ResearchGRPOTrainer:
             load_in_4bit=True,
             fast_inference=True,
             max_lora_rank=self.lora_rank,
-            gpu_memory_utilization=0.7,
+            gpu_memory_utilization=0.6,
+            enforce_eager=True,  # Disable CUDA graphs to reduce memory spikes
         )
         
         model = FastLanguageModel.get_peft_model(

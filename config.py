@@ -34,7 +34,7 @@ class TrainingConfig:
     num_generations: int = 6
     max_prompt_length: int = 256
     max_completion_length: int = 200
-    num_train_epochs: Optional[int] = None
+    num_train_epochs: Optional[int] = 1
     max_steps: int = 100
     save_steps: int = 250
     max_grad_norm: float = 0.1

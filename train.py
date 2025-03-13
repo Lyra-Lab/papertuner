@@ -13,6 +13,7 @@ import os
 import re
 import argparse
 import logging
+import unsloth
 from typing import List, Dict, Any, Optional, Union
 
 import torch

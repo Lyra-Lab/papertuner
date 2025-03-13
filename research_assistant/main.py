@@ -78,11 +78,15 @@ def main():
         }
     )
     
+    # Prepare dataset for GRPO training
+    train_dataset = trainer.prepare_dataset(dataset["train"])
+    eval_dataset = trainer.prepare_dataset(dataset["validation"]) if "validation" in dataset else None
+    
     # Train the model
     print(f"Training model: {args.model}")
     model, results = trainer.train(
-        train_dataset=dataset["train"],
-        eval_dataset=dataset.get("validation"),
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
         per_device_train_batch_size=args.batch_size,

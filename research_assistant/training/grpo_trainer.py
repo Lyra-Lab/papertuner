@@ -118,7 +118,8 @@ class ResearchGRPOTrainer:
                 'answer': self.extract_answer(example[output_column])
             }
         
-        return dataset.map(format_example)
+        formatted_dataset = dataset.map(format_example)
+        return formatted_dataset
     
     def extract_xml_answer(self, text):
         """Extract answer from XML-formatted text."""

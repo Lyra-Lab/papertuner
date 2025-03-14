@@ -1,5 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
 """
 Phi-4 (14B) GRPO Training Script
 
@@ -11,7 +9,6 @@ Original notebook: https://colab.research.google.com/github/unslothai/notebooks/
 
 import os
 import re
-import argparse
 import logging
 import unsloth
 from typing import List, Dict, Any, Optional, Union
@@ -33,6 +30,27 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Define global hyperparameters
+MODEL_NAME = "your_model_name"
+MAX_SEQ_LENGTH = 2048
+LORA_RANK = 32
+
+LEARNING_RATE = 5e-5
+NUM_TRAIN_EPOCHS = 3
+MAX_STEPS = 1000
+BATCH_SIZE = 4
+GRADIENT_ACCUMULATION_STEPS = 2
+NUM_GENERATIONS = 5
+OUTPUT_DIR = "output_dir"
+
+DATASET_NAME = "gsm8k"
+DATASET_CONFIG = "main"
+SPLIT = "train"
+
+WANDB_PROJECT = "your_wandb_project"
+WANDB_NAME = "your_wandb_run_name"
+WANDB_ENABLED = True
+
 # XML format constants
 XML_COT_FORMAT = """\
 <reasoning>
@@ -42,82 +60,6 @@ XML_COT_FORMAT = """\
 {answer}
 </answer>
 """
-
-def parse_args():
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Train Phi-4 with GRPO for reasoning")
-    
-    # Model arguments
-    parser.add_argument("--model_name", type=str, default=default_config.model.model_name,
-                        help="Model name or path")
-    parser.add_argument("--max_seq_length", type=int, default=default_config.model.max_seq_length,
-                        help="Maximum sequence length")
-    parser.add_argument("--lora_rank", type=int, default=default_config.model.lora_rank,
-                        help="LoRA rank")
-    
-    # Training arguments
-    parser.add_argument("--learning_rate", type=float, default=default_config.training.learning_rate,
-                        help="Learning rate")
-    parser.add_argument("--num_train_epochs", type=int, default=default_config.training.num_train_epochs,
-                        help="Number of training epochs")
-    parser.add_argument("--max_steps", type=int, default=default_config.training.max_steps,
-                        help="Maximum number of training steps")
-    parser.add_argument("--batch_size", type=int, default=default_config.training.per_device_train_batch_size,
-                        help="Batch size per device")
-    parser.add_argument("--gradient_accumulation_steps", type=int, 
-                        default=default_config.training.gradient_accumulation_steps,
-                        help="Number of gradient accumulation steps")
-    parser.add_argument("--num_generations", type=int, default=default_config.training.num_generations,
-                        help="Number of generations per prompt")
-    parser.add_argument("--output_dir", type=str, default=default_config.training.output_dir,
-                        help="Output directory")
-    
-    # Dataset arguments
-    parser.add_argument("--dataset_name", type=str, default=default_config.data.dataset_name,
-                        help="Dataset name")
-    parser.add_argument("--dataset_config", type=str, default=default_config.data.dataset_config,
-                        help="Dataset configuration")
-    parser.add_argument("--split", type=str, default=default_config.data.split,
-                        help="Dataset split")
-    
-    # Weights & Biases arguments
-    parser.add_argument("--wandb_project", type=str, default=default_config.wandb.project,
-                        help="Weights & Biases project name")
-    parser.add_argument("--wandb_name", type=str, default=default_config.wandb.name,
-                        help="Weights & Biases run name")
-    parser.add_argument("--no_wandb", action="store_true",
-                        help="Disable Weights & Biases logging")
-    
-    return parser.parse_args()
-
-def update_config_from_args(config: Config, args) -> Config:
-    """Update configuration from command line arguments."""
-    # Update model config
-    config.model.model_name = args.model_name
-    config.model.max_seq_length = args.max_seq_length
-    config.model.lora_rank = args.lora_rank
-    
-    # Update training config
-    config.training.learning_rate = args.learning_rate
-    config.training.num_train_epochs = args.num_train_epochs
-    config.training.max_steps = args.max_steps
-    config.training.per_device_train_batch_size = args.batch_size
-    config.training.gradient_accumulation_steps = args.gradient_accumulation_steps
-    config.training.num_generations = args.num_generations
-    config.training.output_dir = args.output_dir
-    
-    # Update data config
-    config.data.dataset_name = args.dataset_name
-    config.data.dataset_config = args.dataset_config
-    config.data.split = args.split
-    
-    # Update wandb config
-    config.wandb.enabled = not args.no_wandb
-    config.wandb.project = args.wandb_project
-    if args.wandb_name:
-        config.wandb.name = args.wandb_name
-    
-    return config
 
 def extract_xml_answer(text: str) -> str:
     """Extract answer from XML format."""
@@ -134,10 +76,10 @@ def extract_hash_answer(text: str) -> Optional[str]:
 def get_gsm8k_questions(config: Config) -> Dataset:
     """Load and prepare GSM8K dataset."""
     data = load_dataset(
-        config.data.dataset_name, 
+        config.data.dataset_name,
         config.data.dataset_config
     )[config.data.split]
-    
+
     data = data.map(lambda x: {
         'prompt': [
             {'role': 'system', 'content': config.system_prompt},
@@ -145,7 +87,7 @@ def get_gsm8k_questions(config: Config) -> Dataset:
         ],
         'answer': extract_hash_answer(x['answer'])
     })
-    
+
     return data
 
 # Reward functions
@@ -204,7 +146,7 @@ def xmlcount_reward_func(completions, **kwargs) -> List[float]:
 def load_model(config: Config):
     """Load and prepare the model with LoRA."""
     logger.info(f"Loading model {config.model.model_name}")
-    
+
     model, tokenizer = FastLanguageModel.from_pretrained(
         model_name=config.model.model_name,
         max_seq_length=config.model.max_seq_length,
@@ -213,7 +155,7 @@ def load_model(config: Config):
         max_lora_rank=config.model.lora_rank,
         gpu_memory_utilization=config.model.gpu_memory_utilization,
     )
-    
+
     model = FastLanguageModel.get_peft_model(
         model,
         r=config.model.lora_rank,
@@ -222,7 +164,7 @@ def load_model(config: Config):
         use_gradient_checkpointing=config.model.use_gradient_checkpointing,
         random_state=config.model.random_state,
     )
-    
+
     return model, tokenizer
 
 def setup_training(config: Config, model, tokenizer, dataset):
@@ -251,7 +193,7 @@ def setup_training(config: Config, model, tokenizer, dataset):
         report_to="wandb" if config.wandb.enabled else "none",
         output_dir=config.training.output_dir,
     )
-    
+
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
@@ -265,7 +207,7 @@ def setup_training(config: Config, model, tokenizer, dataset):
         args=training_args,
         train_dataset=dataset,
     )
-    
+
     return trainer
 
 def run_inference(config: Config, model, tokenizer, lora_path=None, system_prompt=True):
@@ -279,78 +221,113 @@ def run_inference(config: Config, model, tokenizer, lora_path=None, system_promp
         messages = [
             {"role": "user", "content": "Which is bigger? 9.11 or 9.9?"},
         ]
-    
+
     text = tokenizer.apply_chat_template(
-        messages, 
-        tokenize=False, 
+        messages,
+        tokenize=False,
         add_generation_prompt=True
     )
-    
+
     sampling_params = SamplingParams(
         temperature=config.inference.temperature,
         top_p=config.inference.top_p,
         max_tokens=config.inference.max_tokens,
     )
-    
+
     lora_request = None
     if lora_path:
         lora_request = model.load_lora(lora_path)
-    
+
     output = model.fast_generate(
         [text],
         sampling_params=sampling_params,
         lora_request=lora_request,
     )[0].outputs[0].text
-    
+
     return output
 
 def main():
     """Main function."""
-    args = parse_args()
-    config = update_config_from_args(default_config, args)
-    
+    # Update default config with global hyperparameters
+    config = default_config
+    config.model.model_name = MODEL_NAME
+    config.model.max_seq_length = MAX_SEQ_LENGTH
+    config.model.lora_rank = LORA_RANK
+
+    config.training.learning_rate = LEARNING_RATE
+    config.training.num_train_epochs = NUM_TRAIN_EPOCHS
+    config.training.max_steps = MAX_STEPS
+    config.training.per_device_train_batch_size = BATCH_SIZE
+    config.training.gradient_accumulation_steps = GRADIENT_ACCUMULATION_STEPS
+    config.training.num_generations = NUM_GENERATIONS
+    config.training.output_dir = OUTPUT_DIR
+
+    config.data.dataset_name = DATASET_NAME
+    config.data.dataset_config = DATASET_CONFIG
+    config.data.split = SPLIT
+
+    config.wandb.enabled = WANDB_ENABLED
+    config.wandb.project = WANDB_PROJECT
+    config.wandb.name = WANDB_NAME
+
     # Initialize Weights & Biases
     if config.wandb.enabled:
         wandb.init(
             project=config.wandb.project,
             name=config.wandb.name,
             tags=config.wandb.tags,
-            config=vars(args)
+            config={
+                "model_name": MODEL_NAME,
+                "max_seq_length": MAX_SEQ_LENGTH,
+                "lora_rank": LORA_RANK,
+                "learning_rate": LEARNING_RATE,
+                "num_train_epochs": NUM_TRAIN_EPOCHS,
+                "max_steps": MAX_STEPS,
+                "batch_size": BATCH_SIZE,
+                "gradient_accumulation_steps": GRADIENT_ACCUMULATION_STEPS,
+                "num_generations": NUM_GENERATIONS,
+                "output_dir": OUTPUT_DIR,
+                "dataset_name": DATASET_NAME,
+                "dataset_config": DATASET_CONFIG,
+                "split": SPLIT,
+                "wandb_project": WANDB_PROJECT,
+                "wandb_name": WANDB_NAME,
+            }
         )
         logger.info(f"Initialized Weights & Biases: {wandb.run.name}")
-    
+
     # Create output directory
     os.makedirs(config.training.output_dir, exist_ok=True)
-    
+
     # Load model and tokenizer
     model, tokenizer = load_model(config)
-    
+
     # Load dataset
     dataset = get_gsm8k_questions(config)
     logger.info(f"Loaded dataset with {len(dataset)} examples")
-    
+
     # Set up trainer
     trainer = setup_training(config, model, tokenizer, dataset)
-    
+
     # Train model
     logger.info("Starting training")
     trainer.train()
-    
+
     # Save LoRA weights
     lora_path = os.path.join(config.training.output_dir, "grpo_saved_lora")
     model.save_lora(lora_path)
     logger.info(f"Saved LoRA weights to {lora_path}")
-    
+
     # Run inference without LoRA
     logger.info("Running inference without LoRA")
     output_base = run_inference(config, model, tokenizer, lora_path=None, system_prompt=False)
     logger.info(f"Base model output:\n{output_base}")
-    
+
     # Run inference with LoRA
     logger.info("Running inference with LoRA")
     output_lora = run_inference(config, model, tokenizer, lora_path=lora_path, system_prompt=True)
     logger.info(f"LoRA model output:\n{output_lora}")
-    
+
     # Log to Weights & Biases
     if config.wandb.enabled:
         wandb.log({
@@ -360,4 +337,4 @@ def main():
         wandb.finish()
 
 if __name__ == "__main__":
-    main() 
+    main()

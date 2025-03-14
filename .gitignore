@@ -41,6 +41,7 @@ logs/
 wandb/
 outputs/
 runs/
+data/
 
 # Local configuration
 config_local.py

@@ -66,33 +66,20 @@ def api_call(client, prompt, max_tokens=1500):
 
 # Download and Process
 def has_been_processed(paper_id, processed_dir=PROCESSED_DIR):
-    """
-    Check if a paper has already been downloaded and processed.
-
-    Args:
-        paper_id (str): The ID of the paper to check.
-        processed_dir (Path): Directory where processed files are stored.
-
-    Returns:
-        bool: True if the paper has been processed, False otherwise.
-    """
-    # Check if the processed file exists
+    """Check if a paper has already been downloaded and processed."""
     processed_file = processed_dir / "papers" / f"paper_{paper_id.split('/')[-1]}.json"
 
     if processed_file.exists():
         try:
-            # Verify the file has valid content
             with open(processed_file, 'r') as f:
                 data = json.load(f)
-                # Check if the file has the expected structure
+                # Check for the new structure with multiple QA pairs
                 if (data.get("metadata") and data.get("sections") and
-                    data.get("qa") and data["qa"].get("question") and
-                    data["qa"].get("answer")):
+                    (data.get("qa_pairs") or data.get("qa"))):
                     logging.info(f"Paper {paper_id} already processed. Skipping.")
                     return True
         except (json.JSONDecodeError, IOError) as e:
             logging.warning(f"Found existing but invalid processed file for {paper_id}: {e}")
-            # We'll consider this as not processed and attempt to reprocess it
             return False
 
     return False
@@ -185,16 +172,21 @@ def extract_sections(text):
         logging.error(f"Error extracting core sections: {e}")
         return {}
 
-def generate_qa(client, paper_data, sections):
-    """Generate a high-quality QA pair focused specifically on problem-solving approach selection."""
-    # Prepare context with available content
+def generate_qa(client, paper_data, sections, num_pairs=3):
+    """Generate multiple distinct QA pairs from a single research paper."""
     abstract = paper_data.get("abstract", "")
     problem = sections.get("problem", "")
     methodology = sections.get("methodology", "")
     results = sections.get("results", "")
 
+    # Extract key information about the paper
+    paper_domain = paper_data.get("categories", [""])[0]
+    paper_title = paper_data.get("title", "")
+
+    # Prepare context
     context = f"""
-    Paper Title: {paper_data['title']}
+    Title: {paper_title}
+    Domain: {paper_domain}
     Abstract: {abstract}
     """
 
@@ -205,69 +197,138 @@ def generate_qa(client, paper_data, sections):
     if results:
         context += f"\nResults: {results[:300]}...\n"
 
-    prompt = f"""As an expert research methodology assistant, your task is to create a problem-solving focused question and answer pair based on this machine learning research paper.
+    # Define question categories to ensure diversity
+    question_categories = [
+        "Architecture & Model Design",
+        "Implementation Strategy & Techniques",
+        "Training Approach & Optimization",
+        "Handling Specific Challenges",
+        "Adaptation & Transfer"
+    ]
+
+    # Define examples for each category
+    category_examples = {
+        "Architecture & Model Design": "How would you design the architecture for a model that needs to handle [SPECIFIC_REQUIREMENT] for [PROBLEM_TYPE]?",
+        "Implementation Strategy & Techniques": "What's the most effective approach to implement [TECHNIQUE] when facing [CONSTRAINT]?",
+        "Training Approach & Optimization": "How should one approach training a model for [TASK] when dealing with [DATA_CHALLENGE]?",
+        "Handling Specific Challenges": "What strategies would you recommend to address [SPECIFIC_CHALLENGE] in [DOMAIN]?",
+        "Adaptation & Transfer": "How would you adapt this approach to work in [DIFFERENT_DOMAIN] or with [DIFFERENT_REQUIREMENTS]?"
+    }
+
+    prompt = f"""You are an expert ML research advisor helping fellow researchers design approaches to solve challenging problems.
+Based on this research paper, create {min(num_pairs, 5)} DISTINCT technical research questions and detailed answers.
 
 {context}
 
-IMPORTANT: The question MUST be about HOW to solve a specific technical challenge or WHY a particular architectural approach was chosen. Do NOT generate general questions about research purpose or findings.
+IMPORTANT: Generate {min(num_pairs, 5)} different question-answer pairs that focus on DIFFERENT aspects of the research approach. Each question should belong to a different category from this list:
 
-Specifically, the question should ask one of the following:
-1. "How did the researchers solve the problem of X...?" where X is a specific technical challenge mentioned in the paper
-2. "Why did the researchers choose approach/architecture Y over alternatives...?" where Y is the specific methodology they implemented
-3. "What architectural decisions were crucial for addressing the challenge of Z...?" where Z is a specific requirement or constraint
+1. Architecture & Model Design: Questions about how to design model architectures for specific requirements
+2. Implementation Strategy & Techniques: Questions about implementing specific techniques effectively
+3. Training Approach & Optimization: Questions about training strategies, optimization, and hyperparameters
+4. Handling Specific Challenges: Questions addressing particular technical challenges in the domain
+5. Adaptation & Transfer: Questions about adapting approaches to different domains or requirements
 
-The answer should:
-- Explain the specific approach or architecture that solved the problem
-- Detail WHY this approach was superior to alternatives for this specific problem
-- Include technical details about implementation decisions
-- Mention constraints or requirements that influenced the architectural choices
-- Highlight any novel components that made the solution effective
+Each question should:
+- Be specific and technical (not general or vague)
+- Focus on "how" to approach a problem or "why" certain approaches work
+- Include relevant constraints or requirements
+- Be the type of question researchers would genuinely ask
 
-BAD EXAMPLE (too general):
-Q: What is the purpose of the research?
-A: The purpose of the research is to investigate the effectiveness of a new machine learning algorithm.
+Each answer should:
+- Provide clear, actionable guidance on approach or implementation
+- Explain WHY specific choices are effective (not just what to do)
+- Address tradeoffs and alternatives
+- Include technical details and practical considerations
+- Be thorough (at least 150-250 words)
 
-GOOD EXAMPLE (problem-solving focused):
-Q: How did the researchers solve the challenge of training transformer models with limited computational resources?
-A: The researchers addressed the computational limitation challenge through a novel parameter-efficient fine-tuning approach. Rather than training the entire transformer architecture (which would require significant GPU resources), they implemented adapter modules - small trainable components inserted between transformer layers. This approach reduced the trainable parameter count by 97% compared to full fine-tuning while maintaining 94% of the performance. They specifically chose adapter modules over alternatives like LoRA or prefix-tuning because adapters provided better stability during training and required less hyperparameter tuning. A critical implementation detail was their use of residual connections around each adapter, preventing gradient flow issues during backpropagation. This architectural decision was particularly important for maintaining model stability when working with limited training data.
+FORMAT YOUR RESPONSE LIKE THIS:
+Q1: [First technical question]
+A1: [Detailed answer to first question]
 
-Return only the question and answer in the format:
-Q: [Problem-solving focused question]
-A: [Detailed answer about the approach/architecture]
+Q2: [Second technical question on a different aspect]
+A2: [Detailed answer to second question]
+
+...and so on for {min(num_pairs, 5)} pairs.
 """
 
     try:
-        response = api_call(client, prompt, max_tokens=2000)
+        response = api_call(client, prompt, max_tokens=4000)  # Increased token limit for multiple pairs
 
-        # Parse the response
-        q_start = response.find("Q:")
-        a_start = response.find("A:")
+        # Parse multiple QA pairs from the response
+        qa_pairs = []
 
-        if q_start == -1 or a_start == -1:
-            logging.warning(f"Could not parse Q&A format from response")
-            return None
+        # Split the response into chunks by question markers (Q1:, Q2:, etc.)
+        # First, find all instances of 'Q1:', 'Q2:', etc.
+        q_markers = [f"Q{i}:" for i in range(1, num_pairs+1)]
 
-        question = response[q_start+2:a_start].strip()
-        answer = response[a_start+2:].strip()
+        for i, q_marker in enumerate(q_markers):
+            q_start = response.find(q_marker)
+            if q_start == -1:
+                continue  # This question marker not found
 
-        # Additional validation for problem-solving focus
-        question_lower = question.lower()
-        solution_keywords = ["how", "why", "approach", "solve", "implement", "architecture",
-                            "design", "technique", "method", "strategy", "decision"]
+            # Find the corresponding answer marker
+            a_marker = f"A{i+1}:"
+            a_start = response.find(a_marker, q_start)
+            if a_start == -1:
+                continue  # Answer marker not found
 
-        if not any(keyword in question_lower for keyword in solution_keywords):
-            logging.warning(f"Generated question lacks problem-solving focus: {question}")
-            return None
+            # Find the end of this QA pair (start of next question or end of string)
+            next_q_marker = f"Q{i+2}:" if i+1 < len(q_markers) else None
+            q_end = response.find(next_q_marker, a_start) if next_q_marker else len(response)
 
-        # Check answer quality
-        if len(answer) < 250:  # Ensure detailed answers
-            logging.warning(f"Generated answer too brief ({len(answer)} chars)")
-            return None
+            # Extract question and answer text
+            question_text = response[q_start+len(q_marker):a_start].strip()
+            answer_text = response[a_start+len(a_marker):q_end].strip()
 
-        return {"question": question, "answer": answer}
+            # Add to our QA pairs if they're non-empty
+            if question_text and answer_text:
+                qa_pairs.append({
+                    "question": question_text,
+                    "answer": answer_text,
+                    "category": question_categories[min(i, len(question_categories)-1)]
+                })
+
+        # If no QA pairs were extracted, attempt a different parsing approach
+        if not qa_pairs:
+            # Try splitting by double newlines which often separate QA pairs
+            sections = response.split("\n\n")
+            current_q = None
+            current_a = None
+
+            for section in sections:
+                if section.startswith("Q") and ":" in section:
+                    # If we already have a Q and A, save them
+                    if current_q and current_a:
+                        qa_pairs.append({
+                            "question": current_q,
+                            "answer": current_a,
+                            "category": "General"  # Can't determine category in this fallback
+                        })
+
+                    # Start a new question
+                    current_q = section.split(":", 1)[1].strip()
+                    current_a = None
+                elif section.startswith("A") and ":" in section and current_q:
+                    current_a = section.split(":", 1)[1].strip()
+
+            # Don't forget the last pair
+            if current_q and current_a:
+                qa_pairs.append({
+                    "question": current_q,
+                    "answer": current_a,
+                    "category": "General"
+                })
+
+        # Validate each QA pair and only keep the good ones
+        validated_pairs = []
+        for pair in qa_pairs:
+            if validate_qa_pair(pair):
+                validated_pairs.append(pair)
+
+        return validated_pairs if validated_pairs else None
 
     except Exception as e:
-        logging.error(f"QA generation failed: {e}")
+        logging.error(f"Multiple QA generation failed: {e}")
         return None
 
 def validate_qa_pair(qa_pair):
@@ -396,13 +457,11 @@ def process_paper(client, paper):
         "pdf_url": paper.pdf_url
     }
 
-    # Extract just the core sections we need
+    # Extract sections
     sections = extract_sections(text)
 
-    # Check if we have enough content to work with
-    # Allow papers with just abstract and some content if we couldn't extract proper sections
+    # Use fallback if we couldn't extract proper sections
     if not sections.get("methodology") and not sections.get("problem"):
-        # Use the abstract and first 1000 characters as a fallback
         sections = {
             "problem": paper_data["abstract"],
             "methodology": text[:2000] if len(text) > 2000 else text,
@@ -410,13 +469,13 @@ def process_paper(client, paper):
         }
         logging.info(f"Using abstract and text excerpts for paper {paper.entry_id} due to missing sections.")
 
-    # Generate QA pair based on available content
-    qa_pair = generate_qa(client, paper_data, sections)
-    if not qa_pair or not validate_qa_pair(qa_pair):
-        logging.warning(f"Skipping paper {paper.entry_id} due to low-quality QA pair.")
+    # Generate multiple QA pairs
+    qa_pairs = generate_qa(client, paper_data, sections, num_pairs=3)
+    if not qa_pairs:
+        logging.warning(f"Skipping paper {paper.entry_id} due to failure to generate quality QA pairs.")
         return None
 
-    # Return a simplified paper structure with just what we need
+    # Return the processed paper data with multiple QA pairs
     return {
         "metadata": {
             "id": paper_data["id"],
@@ -424,7 +483,7 @@ def process_paper(client, paper):
             "categories": paper_data["categories"]
         },
         "sections": sections,  # Keep the sections for reference
-        "qa": qa_pair
+        "qa_pairs": qa_pairs
     }
 
 def load_processed_manifest():
@@ -623,45 +682,64 @@ def upload_to_hf(processed_dir=PROCESSED_DIR, split_ratios=(0.8, 0.1, 0.1)):
             with open(file, "r") as f:
                 data = json.load(f)
 
-                if "qa" in data and data["qa"].get("question") and data["qa"].get("answer"):
+                # Handle the case with multiple QA pairs
+                if "qa_pairs" in data and isinstance(data["qa_pairs"], list):
+                    for qa in data["qa_pairs"]:
+                        if qa.get("question") and qa.get("answer"):
+                            qa_pairs.append({
+                                "question": qa["question"],
+                                "answer": qa["answer"],
+                                "category": qa.get("category", "General"),
+                                "paper_id": data["metadata"]["id"],
+                                "paper_title": data["metadata"]["title"],
+                                "categories": data["metadata"]["categories"]
+                            })
+
+                # Handle the legacy case with a single QA pair
+                elif "qa" in data and data["qa"].get("question") and data["qa"].get("answer"):
                     qa_pairs.append({
                         "question": data["qa"]["question"],
                         "answer": data["qa"]["answer"],
+                        "category": "General",
                         "paper_id": data["metadata"]["id"],
+                        "paper_title": data["metadata"]["title"],
                         "categories": data["metadata"]["categories"]
                     })
 
-                    # Aggregate metadata
-                    metadata["titles"].append(data["metadata"]["title"])
-                    metadata["authors"].extend(data["metadata"].get("authors", []))
+                # Aggregate metadata
+                metadata["titles"].append(data["metadata"]["title"])
+                metadata["paper_ids"].append(data["metadata"]["id"])
+                if "authors" in data["metadata"]:
+                    metadata["authors"].extend(data["metadata"]["authors"])
     except json.JSONDecodeError as e:
         logging.error(f"JSON decode error while preparing dataset for HF upload: {e}")
-        return False  # Indicate upload preparation failure
+        return False
     except Exception as e:
         logging.error(f"Error preparing dataset for HF upload: {e}")
-        return False  # Indicate upload preparation failure
+        return False
 
     dataset = Dataset.from_list(qa_pairs)
-    split = dataset.train_test_split(test_size=split_ratios[1] + split_ratios[2])
-    test_val = split["test"].train_test_split(test_size=split_ratios[2]/sum(split_ratios[1:]))
-    final_dataset = concatenate_datasets([
-        split["train"],
-        test_val["train"],
-        test_val["test"]
-    ])
+
+    # Update the dataset card to include category information
+    categories = set(item["category"] for item in qa_pairs if "category" in item)
 
     card_content = f"""\
-# Research Assistant QA Dataset
+# Research Methodology QA Dataset
 
 ## Overview
-- Contains {len(dataset)} validated question-answer pairs
+- Contains {len(qa_pairs)} validated question-answer pairs
 - Derived from {len(processed_files)} research papers
-- Categories: {', '.join(set(sum(metadata['categories'], [])))}
+- Domains: {', '.join(set(sum([item["categories"] for item in qa_pairs], [])))}
+
+## Question Categories
+{', '.join(categories)}
 
 ## Fields
-- `question`: Research methodology question
+- `question`: Technical research methodology question
 - `answer`: Detailed methodology answer
+- `category`: Question category/type
 - `paper_id`: Source paper identifier
+- `paper_title`: Title of the source paper
 - `categories`: arXiv categories
 """
 
@@ -669,7 +747,7 @@ def upload_to_hf(processed_dir=PROCESSED_DIR, split_ratios=(0.8, 0.1, 0.1)):
         login(token=HF_TOKEN)
         create_repo(repo_id=HF_REPO_ID, repo_type="dataset", exist_ok=True)
 
-        final_dataset.push_to_hub(
+        dataset.push_to_hub(
             HF_REPO_ID,
             commit_message=f"Add dataset v1.0 with {len(dataset)} entries"
         )

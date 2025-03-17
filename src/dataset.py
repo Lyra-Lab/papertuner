@@ -15,6 +15,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 import fitz  # PyMuPDF
 import arxiv
 from openai import OpenAI
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,8 +25,10 @@ RAW_DIR = Path("data/raw_dataset")
 PROCESSED_DIR = Path("data/processed_dataset")
 HF_TOKEN = os.getenv("HF_TOKEN")
 HF_REPO_ID = os.getenv("HF_REPO_ID")
-# WARNING: USING HARDCODED API KEY FOR OPENROUTER
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+# API configuration constants
+API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+API_KEY = os.getenv("GEMINI_API_KEY") or "AIzaSyDP1tXAkNMw1caHcAIhOB4x9L0DyWMne58"
 
 # Utility functions
 def setup_dirs():
@@ -49,7 +52,7 @@ def api_call(client, prompt, max_tokens=1500):
     def _api_call(client, prompt, max_tokens):
         try:
             response = client.chat.completions.create(
-                model="google/gemini-2.0-pro-exp-02-05:free",
+                model="gemini-2.0-flash",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=max_tokens
@@ -57,7 +60,7 @@ def api_call(client, prompt, max_tokens=1500):
             return response.choices[0].message.content.strip()
         except Exception as e:
             logging.error(f"OpenAI API call failed: {e}")
-            raise # Re-raise for retry to work
+            raise  # Re-raise for retry to work
 
     return _api_call(client, prompt, max_tokens)
 
@@ -94,77 +97,218 @@ def has_been_processed(paper_id, processed_dir=PROCESSED_DIR):
 
     return False
 
-def extract_sections(client, text):
-    prompt = f"""Identify and extract these sections from the research paper text:
-    - Problem Statement
-    - Literature Review
-    - Hypothesis
-    - Methodology
-
-    Return ONLY a JSON format with these keys. If a section isn't found, set its value to null.
-    Text: {text[:6000]}  # Truncate to stay within context limits
-    """
+def extract_sections(text):
+    """Extract key sections from ML research papers with more flexible pattern matching."""
     try:
-        response = api_call(client, prompt)
-        return json.loads(response.split("```json")[-1].split("```")[0])
-    except json.JSONDecodeError as e:
-        logging.error(f"JSON decode error during section extraction: {e}")
-        return {}
+        # More comprehensive patterns for ML papers
+        # Problem/Introduction patterns
+        problem_patterns = [
+            r"(?:INTRODUCTION|BACKGROUND|PROBLEM STATEMENT|MOTIVATION|OVERVIEW).*?(?=\n\n[A-Z][A-Z\s]+\n)",
+            r"(?:1[\.\s]+INTRODUCTION|1[\.\s]+BACKGROUND|I[\.\s]+INTRODUCTION).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
+            r"(?:\n\nIntroduction\n|\n\nBackground\n|\n\nMotivation\n).*?(?=\n\n[A-Z][a-z])"
+        ]
+
+        # Methodology patterns
+        method_patterns = [
+            r"(?:METHODOLOGY|METHOD|APPROACH|EXPERIMENTAL DESIGN|PROPOSED METHOD|MODEL ARCHITECTURE|SYSTEM DESIGN|NETWORK ARCHITECTURE|IMPLEMENTATION|PROPOSED APPROACH).*?(?=\n\n[A-Z][A-Z\s]+\n)",
+            r"(?:[2-4][\.\s]+(?:METHODOLOGY|METHOD|APPROACH|PROPOSED|MODEL|ARCHITECTURE)).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
+            r"(?:\n\nMethodology\n|\n\nMethod\n|\n\nApproach\n|\n\nProposed method\n|\n\nArchitecture\n|\n\nModel\n|\n\nImplementation\n).*?(?=\n\n[A-Z][a-z])"
+        ]
+
+        # Results patterns
+        result_patterns = [
+            r"(?:RESULTS|EVALUATION|FINDINGS|EXPERIMENTS|EXPERIMENTAL RESULTS|PERFORMANCE|EVALUATION RESULTS).*?(?=\n\n[A-Z][A-Z\s]+\n)",
+            r"(?:[3-6][\.\s]+(?:RESULTS|EVALUATION|EXPERIMENTS|PERFORMANCE)).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
+            r"(?:\n\nResults\n|\n\nEvaluation\n|\n\nExperiments\n|\n\nPerformance\n|\n\nExperimental results\n).*?(?=\n\n[A-Z][a-z])"
+        ]
+
+        # Try all patterns for each section type
+        problem_text = ""
+        for pattern in problem_patterns:
+            match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+            if match:
+                problem_text = match.group(0)
+                break
+
+        method_text = ""
+        for pattern in method_patterns:
+            match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+            if match:
+                method_text = match.group(0)
+                break
+
+        result_text = ""
+        for pattern in result_patterns:
+            match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+            if match:
+                result_text = match.group(0)
+                break
+
+        # If we still don't have the methodology section, try a fallback approach
+        if not method_text:
+            # Look for sections that might contain methodology information
+            method_related_keywords = [
+                "architecture", "network", "model", "algorithm", "framework",
+                "implementation", "system", "approach", "design", "experiment"
+            ]
+
+            # Search for paragraphs with methodology-related content
+            paragraphs = re.split(r'\n\n+', text)
+            method_paragraphs = []
+
+            for paragraph in paragraphs:
+                # Check if paragraph is likely about methodology
+                if any(keyword in paragraph.lower() for keyword in method_related_keywords):
+                    if len(paragraph) > 100:  # Only include substantial paragraphs
+                        method_paragraphs.append(paragraph)
+
+            if method_paragraphs:
+                method_text = "\n\n".join(method_paragraphs[:3])  # Limit to first few relevant paragraphs
+
+        # If we identified any sections, return them
+        sections = {
+            "problem": problem_text.strip(),
+            "methodology": method_text.strip(),
+            "results": result_text.strip()
+        }
+
+        # Log which sections were found
+        found_sections = [k for k, v in sections.items() if v]
+        if found_sections:
+            logging.info(f"Extracted sections: {', '.join(found_sections)}")
+        else:
+            logging.warning("No sections extracted from paper")
+
+        return sections
+
     except Exception as e:
-        logging.error(f"Section extraction failed: {e}")
+        logging.error(f"Error extracting core sections: {e}")
         return {}
 
-def generate_qa(client, sections):
-    prompt = f"""Create a research question and methodology answer using this context:
-    Problem: {sections.get('Problem Statement', '')}
-    Literature: {sections.get('Literature Review', '')}
-    Hypothesis: {sections.get('Hypothesis', '')}
+def generate_qa(client, paper_data, sections):
+    """Generate a high-quality QA pair focused specifically on problem-solving approach selection."""
+    # Prepare context with available content
+    abstract = paper_data.get("abstract", "")
+    problem = sections.get("problem", "")
+    methodology = sections.get("methodology", "")
+    results = sections.get("results", "")
 
-    Format output as:
-    Q: [Question about research methodology]
-    A: [Detailed methodology answering the question]
+    context = f"""
+    Paper Title: {paper_data['title']}
+    Abstract: {abstract}
     """
+
+    if problem:
+        context += f"\nProblem/Introduction: {problem[:500]}...\n"
+    if methodology:
+        context += f"\nMethodology/Approach: {methodology[:1000]}...\n"
+    if results:
+        context += f"\nResults: {results[:300]}...\n"
+
+    prompt = f"""As an expert research methodology assistant, your task is to create a problem-solving focused question and answer pair based on this machine learning research paper.
+
+{context}
+
+IMPORTANT: The question MUST be about HOW to solve a specific technical challenge or WHY a particular architectural approach was chosen. Do NOT generate general questions about research purpose or findings.
+
+Specifically, the question should ask one of the following:
+1. "How did the researchers solve the problem of X...?" where X is a specific technical challenge mentioned in the paper
+2. "Why did the researchers choose approach/architecture Y over alternatives...?" where Y is the specific methodology they implemented
+3. "What architectural decisions were crucial for addressing the challenge of Z...?" where Z is a specific requirement or constraint
+
+The answer should:
+- Explain the specific approach or architecture that solved the problem
+- Detail WHY this approach was superior to alternatives for this specific problem
+- Include technical details about implementation decisions
+- Mention constraints or requirements that influenced the architectural choices
+- Highlight any novel components that made the solution effective
+
+BAD EXAMPLE (too general):
+Q: What is the purpose of the research?
+A: The purpose of the research is to investigate the effectiveness of a new machine learning algorithm.
+
+GOOD EXAMPLE (problem-solving focused):
+Q: How did the researchers solve the challenge of training transformer models with limited computational resources?
+A: The researchers addressed the computational limitation challenge through a novel parameter-efficient fine-tuning approach. Rather than training the entire transformer architecture (which would require significant GPU resources), they implemented adapter modules - small trainable components inserted between transformer layers. This approach reduced the trainable parameter count by 97% compared to full fine-tuning while maintaining 94% of the performance. They specifically chose adapter modules over alternatives like LoRA or prefix-tuning because adapters provided better stability during training and required less hyperparameter tuning. A critical implementation detail was their use of residual connections around each adapter, preventing gradient flow issues during backpropagation. This architectural decision was particularly important for maintaining model stability when working with limited training data.
+
+Return only the question and answer in the format:
+Q: [Problem-solving focused question]
+A: [Detailed answer about the approach/architecture]
+"""
+
     try:
         response = api_call(client, prompt, max_tokens=2000)
 
-        # Find the start and end indices of Q and A sections
-        q_start_index = response.find("Q:")
-        a_start_index = response.find("A:", q_start_index + 1) # Start search for A after Q
+        # Parse the response
+        q_start = response.find("Q:")
+        a_start = response.find("A:")
 
-        if q_start_index == -1 or a_start_index == -1:
-            # Try with bold markers (**Q:** and **A:**) which appear in some API responses
-            q_start_index = response.find("**Q:")
-            if q_start_index != -1:
-                q_start_index += 2  # Adjust for "**" prefix
-
-            a_start_index = response.find("**A:", q_start_index + 1)
-            if a_start_index != -1:
-                a_start_index += 2  # Adjust for "**" prefix
-
-            # If still not found, log error and return None
-            if q_start_index == -1 or a_start_index == -1:
-                logging.error(f"Could not find 'Q:' or 'A:' in API response: {response}")
-                return None
-
-        # Extract question and answer, cleaning up extra characters
-        q = response[q_start_index + 2:a_start_index].strip() # +2 to skip "Q:"
-        a = response[a_start_index + 2:].strip() # +2 to skip "A:"
-
-        # Remove markdown formatting if present
-        q = q.replace('*', '').strip()
-        a = a.replace('*', '').strip()
-
-        # Basic validation - ensure question and answer are not empty
-        if not q or not a:
-            logging.error(f"Empty question or answer extracted. Q: '{q}', A: '{a}'")
-            logging.error(f"Full API response for debugging: {response}") # Log full response if empty QA
+        if q_start == -1 or a_start == -1:
+            logging.warning(f"Could not parse Q&A format from response")
             return None
 
-        return {"question": q, "answer": a}
+        question = response[q_start+2:a_start].strip()
+        answer = response[a_start+2:].strip()
+
+        # Additional validation for problem-solving focus
+        question_lower = question.lower()
+        solution_keywords = ["how", "why", "approach", "solve", "implement", "architecture",
+                            "design", "technique", "method", "strategy", "decision"]
+
+        if not any(keyword in question_lower for keyword in solution_keywords):
+            logging.warning(f"Generated question lacks problem-solving focus: {question}")
+            return None
+
+        # Check answer quality
+        if len(answer) < 250:  # Ensure detailed answers
+            logging.warning(f"Generated answer too brief ({len(answer)} chars)")
+            return None
+
+        return {"question": question, "answer": answer}
 
     except Exception as e:
         logging.error(f"QA generation failed: {e}")
         return None
+
+def validate_qa_pair(qa_pair):
+    """Apply quality checks to ensure the QA pair focuses on problem-solving approaches."""
+    if not qa_pair or not qa_pair.get("question") or not qa_pair.get("answer"):
+        return False
+
+    question = qa_pair["question"]
+    answer = qa_pair["answer"]
+
+    # Check minimum lengths
+    if len(question) < 20 or len(answer) < 250:  # Increased minimum answer length
+        return False
+
+    # Check for problem-solving focus in question
+    question_lower = question.lower()
+    problem_solving_keywords = ["how", "why", "approach", "solve", "address", "implement",
+                               "architecture", "design", "technique", "method", "decision",
+                               "strategy", "challenge", "framework", "structure", "mechanism"]
+
+    if not any(keyword in question_lower for keyword in problem_solving_keywords):
+        return False
+
+    # Check for technical content in answer
+    answer_lower = answer.lower()
+    technical_keywords = ["model", "algorithm", "parameter", "layer", "network", "training",
+                         "architecture", "implementation", "performance", "component",
+                         "structure", "design", "feature", "optimization"]
+
+    if not any(keyword in answer_lower for keyword in technical_keywords):
+        return False
+
+    # Check for comparative/reasoning language in answer
+    reasoning_keywords = ["because", "therefore", "advantage", "benefit", "compared",
+                         "better than", "instead of", "rather than", "alternative",
+                         "trade-off", "superior", "effective", "efficient", "chosen"]
+
+    if not any(keyword in answer_lower for keyword in reasoning_keywords):
+        return False
+
+    return True
 
 def download_pdf(session, url, paper_id):
     retry_strategy = create_retry_strategy()
@@ -248,30 +392,39 @@ def process_paper(client, paper):
         "title": paper.title,
         "authors": [str(a) for a in paper.authors],
         "abstract": paper.summary,
-        "full_text": text,
-        "published": paper.published.isoformat(),
         "categories": paper.categories,
         "pdf_url": paper.pdf_url
     }
 
-    sections = extract_sections(client, text)
-    if not sections:
-        logging.warning(f"Skipping paper {paper.entry_id} due to section extraction failure.")
+    # Extract just the core sections we need
+    sections = extract_sections(text)
+
+    # Check if we have enough content to work with
+    # Allow papers with just abstract and some content if we couldn't extract proper sections
+    if not sections.get("methodology") and not sections.get("problem"):
+        # Use the abstract and first 1000 characters as a fallback
+        sections = {
+            "problem": paper_data["abstract"],
+            "methodology": text[:2000] if len(text) > 2000 else text,
+            "results": text[-1000:] if len(text) > 3000 else ""
+        }
+        logging.info(f"Using abstract and text excerpts for paper {paper.entry_id} due to missing sections.")
+
+    # Generate QA pair based on available content
+    qa_pair = generate_qa(client, paper_data, sections)
+    if not qa_pair or not validate_qa_pair(qa_pair):
+        logging.warning(f"Skipping paper {paper.entry_id} due to low-quality QA pair.")
         return None
 
-    qa = generate_qa(client, sections)
-    if not qa:
-        logging.warning(f"Skipping paper {paper.entry_id} due to QA generation failure.")
-        return None
-
+    # Return a simplified paper structure with just what we need
     return {
         "metadata": {
             "id": paper_data["id"],
             "title": paper_data["title"],
             "categories": paper_data["categories"]
         },
-        "sections": sections,
-        "qa": qa
+        "sections": sections,  # Keep the sections for reference
+        "qa": qa_pair
     }
 
 def load_processed_manifest():
@@ -348,9 +501,10 @@ def process_all_papers(max_papers=100):
         sort_order=arxiv.SortOrder.Descending
     )
 
+    # Use API_BASE_URL and API_KEY constants here
     openrouter_client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=OPENROUTER_API_KEY or "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"
+        base_url=API_BASE_URL,
+        api_key=API_KEY
     )
 
     new_manifest_items = []
@@ -583,9 +737,9 @@ if __name__ == "__main__":
 
     # If we have some papers (either new or previously processed), continue with validation
     results = validate_dataset()
-    print(f"Validation Results:\n- Total entries: {results['total_files']}"  # Keep print for user feedback
+    print(f"Validation Results:\n- Total entries: {results['total_files']}"
           f"\n- Valid QA pairs: {results['valid_entries']}"
-          f"\n- Issues found: {len(results['validation_issues'])}")
+          f"\n- Issues found: {len(results['validation_issues'])})")
     if results['validation_issues']:
         logging.warning(f"Dataset validation issues found: {results['validation_issues']}")
 
@@ -597,7 +751,7 @@ if __name__ == "__main__":
 
     stats = generate_statistics()
     if stats:  # generate_statistics returns None on failure
-        print("Dataset Statistics:")  # Keep print for user feedback
+        print("Dataset Statistics:")
         print(f"- Total papers: {stats['total_papers']}")
         print(f"- Average answer length: {stats['avg_answer_length']:.1f} chars")
         print("- Category Distribution:")

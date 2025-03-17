@@ -14,19 +14,19 @@
       devShells = forEachSupportedSystem ({ pkgs }: {
         default = pkgs.mkShell {
           venvDir = ".venv";
-          packages = with pkgs; [ python3 ] ++
-            (with pkgs.python3Packages; [
+          packages = with pkgs; [ python312 ] ++
+            (with pkgs.python312Packages; [
               pip
               venvShellHook
-              arxiv 
-              google-generativeai
-              pymupdf 
-              tqdm 
-              requests
-              tenacity
-              datasets 
-              huggingface-hub
               openai
+              requests
+              tqdm
+              arxiv
+              pymupdf
+              tenacity
+              huggingface-hub
+              datasets
+              marimo
             ]);
         };
       });

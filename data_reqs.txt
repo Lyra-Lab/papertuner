@@ -1,0 +1,9 @@
+PyMuPDF
+openai
+requests
+tqdm
+arxiv
+tenacity
+huggingface-hub
+datasets
+marimo

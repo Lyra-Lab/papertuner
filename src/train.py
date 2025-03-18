@@ -1,4 +1,3 @@
-# Fix for the TypeError with reference_column
 from datasets import load_dataset
 from unsloth import FastLanguageModel
 from transformers import TrainingArguments
@@ -43,16 +42,44 @@ def verify_output_format(generated):
     has_thinking = "<think>" in generated and "</think>" in generated
     return has_thinking
 
-def composite_reward(completions, references, **kwargs):
-    """Composite reward for a list of completions and their corresponding references."""
+# Updated reward function to match GRPO trainer's expected signature
+def composite_reward(prompts=None, completions=None, **kwargs):
+    """Reward function that conforms to GRPO's expected interface.
+
+    Args:
+        prompts: List of prompts
+        completions: List of completions
+        **kwargs: Additional keyword arguments
+
+    Returns:
+        List of reward scores
+    """
+    # Get references from the dataset
+    train_dataset = kwargs.get('train_dataset', None)
+    batch_indices = kwargs.get('batch_indices', None)
+
+    if train_dataset is None or batch_indices is None:
+        # Fallback for testing/debugging
+        return [0.0] * len(completions)
+
+    # Extract references from the dataset based on batch indices
+    references = [train_dataset[idx]['reference'] for idx in batch_indices]
+
     rewards = []
     for completion, reference in zip(completions, references):
-        response = completion[0]["content"]
+        if not completion or not reference:
+            rewards.append(0.0)
+            continue
+
+        response = completion[0]["content"] if isinstance(completion[0], dict) else completion[0]
+
         if not verify_output_format(response):
             rewards.append(0.0)  # Penalize if the output format is incorrect
             continue
+
         reward = semantic_similarity(response, reference)
         rewards.append(reward)
+
     return rewards
 
 def load_and_format_dataset():
@@ -71,7 +98,7 @@ def load_and_format_dataset():
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": example["question"]}
             ],
-            "reference": example["answer"]  # Renamed to match what we'll use in the trainer
+            "reference": example["answer"]  # Used by the reward function
         }
 
     return dataset.map(format_example)
@@ -113,7 +140,6 @@ def main():
     )
 
     # Initialize GRPO trainer
-    # Remove the reference_column parameter and ensure dataset has "reference" column
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
@@ -122,7 +148,7 @@ def main():
         ],
         args=training_args,
         train_dataset=dataset,
-        eval_dataset=dataset,  # Ensure you have an eval dataset if needed
+        eval_dataset=dataset.select(range(min(100, len(dataset)))),  # Smaller eval dataset
     )
 
     # Train

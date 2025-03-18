@@ -12,6 +12,9 @@ logging.basicConfig(level=logging.INFO)
 MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 DATASET_REPO = "densud2/ml_qa_dataset"
 OUTPUT_DIR = "output/rl_finetuned"
+HF_MODEL_NAME = "username/grpo_finetuned_model"  # Replace 'username' with your Hugging Face username
+HF_TOKEN = ""  # Your Hugging Face token, get it from https://huggingface.co/settings/tokens
+
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Define system prompt
@@ -129,24 +132,42 @@ def main():
 
     # Save model
     model.save_pretrained_merged(f"{OUTPUT_DIR}/final_model", tokenizer, save_method="lora")
+    model.save_lora(f"{OUTPUT_DIR}/grpo_saved_lora")
 
     # Test the model
-    sample_question = "How would you design a deep learning model for time series forecasting?"
-
     text = tokenizer.apply_chat_template([
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": sample_question},
+        {"role": "user", "content": "Calculate pi."},
     ], tokenize=False, add_generation_prompt=True)
 
     from vllm import SamplingParams
-    sampling_params = SamplingParams(temperature=0.7, top_p=0.9, max_tokens=512)
+    sampling_params = SamplingParams(
+        temperature=0.8,
+        top_p=0.95,
+        max_tokens=1024,
+    )
 
     output = model.fast_generate(
         [text],
         sampling_params=sampling_params,
+        lora_request=model.load_lora(f"{OUTPUT_DIR}/grpo_saved_lora")
     )[0].outputs[0].text
 
     print(f"Sample output:\n{output}")
+
+    # Save model with different quantization methods
+    quantization_methods = ["f16", "q4_k_m", "q5_k_m", "q8_0"]
+
+    for quant_method in quantization_methods:
+        model.save_pretrained_gguf(f"{OUTPUT_DIR}/model_{quant_method}", tokenizer, quantization_method=quant_method)
+
+    # Upload the model to Hugging Face with the best quantization method (e.g., q4_k_m)
+    model.push_to_hub_gguf(
+        HF_MODEL_NAME,
+        tokenizer,
+        quantization_method="q4_k_m",
+        token=HF_TOKEN
+    )
 
 if __name__ == "__main__":
     main()

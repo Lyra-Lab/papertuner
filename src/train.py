@@ -2,6 +2,10 @@ from datasets import load_dataset
 from unsloth import FastLanguageModel
 from transformers import TrainingArguments
 from trl import GRPOTrainer
+from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import cosine_similarity
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
+import torch
 import logging
 import os
 
@@ -34,28 +38,35 @@ def extract_xml_reasoning(text):
     reasoning = text.split("<reasoning>")[-1].split("</reasoning>")[0].strip()
     return reasoning
 
-def format_adherence_reward(completions, **kwargs):
-    """Reward for following the XML format"""
-    responses = [completion[0]["content"] for completion in completions]
-    rewards = []
-    for response in responses:
-        score = 0.0
-        if "<reasoning>" in response and "</reasoning>" in response:
-            score += 0.5
-        if "<approach>" in response and "</approach>" in response:
-            score += 0.5
-        rewards.append(score)
-    return rewards
+# Initialize models (do this once)
+st_model = SentenceTransformer('all-mpnet-base-v2')
+nli_model = AutoModelForSequenceClassification.from_pretrained('roberta-large-mnli')
+nli_tokenizer = AutoTokenizer.from_pretrained('roberta-large-mnli')
 
-def technical_reward(completions, **kwargs):
-    """Reward for technical content"""
-    responses = [completion[0]["content"] for completion in completions]
-    technical_terms = ["method", "architecture", "implement", "model", "technique", "process"]
+def semantic_similarity(generated, reference):
+    embeddings = st_model.encode([generated, reference])
+    similarity = cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
+    return (similarity + 1) / 2
+
+def factual_verification(reference, generated):
+    inputs = nli_tokenizer(reference, generated, return_tensors='pt', truncation=True, max_length=512)
+    with torch.no_grad():
+        outputs = nli_model(**inputs)
+    probs = torch.softmax(outputs.logits, dim=1)
+    return probs[:, 2].item()
+
+def calculate_reward(generated, reference):
+    sem_sim = semantic_similarity(generated, reference)
+    fact_ver = factual_verification(reference, generated)
+    return 0.6 * sem_sim + 0.4 * fact_ver
+
+def composite_reward(completions, references, **kwargs):
+    """Composite reward for a list of completions and their corresponding references."""
     rewards = []
-    for response in responses:
-        approach = extract_xml_approach(response)
-        count = sum(1 for term in technical_terms if term in approach.lower())
-        rewards.append(min(1.0, count / 5))
+    for completion, reference in zip(completions, references):
+        response = completion[0]["content"]
+        reward = calculate_reward(response, reference)
+        rewards.append(reward)
     return rewards
 
 def load_and_format_dataset():
@@ -120,11 +131,12 @@ def main():
         model=model,
         processing_class=tokenizer,
         reward_funcs=[
-            format_adherence_reward,
-            technical_reward,
+            composite_reward,
         ],
         args=training_args,
         train_dataset=dataset,
+        eval_dataset=dataset,  # Ensure you have an eval dataset if needed
+        reference_column="original_answer",  # Add reference column for reward calculation
     )
 
     # Train

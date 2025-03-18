@@ -41,29 +41,18 @@ def verify_output_format(generated):
     has_thinking = "<think>" in generated and "</think>" in generated
     return has_thinking
 
-# Define reward functions that matches the expected format
-def xmlcount_reward_func(completions, **kwargs):
-    """Count XML tags for format compliance."""
-    def count_xml(text):
-        count = 0.0
-        if text.count("<think>") == 1:
-            count += 0.125
-        if text.count("</think>") == 1:
-            count += 0.125
-        if text.count("<think>") == 1 and text.count("</think>") == 1:
-            count += 0.25
-        return count
+# Updated composite reward function that matches GRPOTrainer's expected signature
+def composite_reward(prompts=None, completions=None, **kwargs):
+    """Reward function that conforms to GRPO's expected interface.
 
-    contents = [completion[0]["content"] for completion in completions]
-    return [count_xml(c) for c in contents]
+    Args:
+        prompts: List of prompts
+        completions: List of completions
+        **kwargs: Additional keyword arguments
 
-def format_reward_func(completions, **kwargs):
-    """Reward function that checks if the completion has the correct format."""
-    contents = [completion[0]["content"] for completion in completions]
-    return [0.5 if verify_output_format(c) else 0.0 for c in contents]
-
-def semantic_reward_func(prompts, completions, **kwargs):
-    """Reward function based on semantic similarity to references."""
+    Returns:
+        List of reward scores
+    """
     # Get references from the dataset
     train_dataset = kwargs.get('train_dataset', None)
     batch_indices = kwargs.get('batch_indices', None)
@@ -74,15 +63,20 @@ def semantic_reward_func(prompts, completions, **kwargs):
 
     # Extract references from the dataset based on batch indices
     references = [train_dataset[idx]['reference'] for idx in batch_indices]
-    contents = [completion[0]["content"] for completion in completions]
 
     rewards = []
-    for content, reference in zip(contents, references):
-        if not verify_output_format(content):
+    for completion, reference in zip(completions, references):
+        if not completion or not reference:
             rewards.append(0.0)
             continue
 
-        reward = semantic_similarity(content, reference)
+        response = completion[0]["content"] if isinstance(completion[0], dict) else completion[0]
+
+        if not verify_output_format(response):
+            rewards.append(0.0)  # Penalize if the output format is incorrect
+            continue
+
+        reward = semantic_similarity(response, reference)
         rewards.append(reward)
 
     return rewards
@@ -163,11 +157,7 @@ def main():
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
-        reward_funcs=[
-            xmlcount_reward_func,
-            format_reward_func,
-            semantic_reward_func,
-        ],
+        reward_funcs=[composite_reward],
         args=training_args,
         train_dataset=dataset,
     )

@@ -134,27 +134,6 @@ def main():
     model.save_pretrained_merged(f"{OUTPUT_DIR}/final_model", tokenizer, save_method="lora")
     model.save_lora(f"{OUTPUT_DIR}/grpo_saved_lora")
 
-    # Test the model
-    text = tokenizer.apply_chat_template([
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": "Calculate pi."},
-    ], tokenize=False, add_generation_prompt=True)
-
-    from vllm import SamplingParams
-    sampling_params = SamplingParams(
-        temperature=0.8,
-        top_p=0.95,
-        max_tokens=1024,
-    )
-
-    output = model.fast_generate(
-        [text],
-        sampling_params=sampling_params,
-        lora_request=model.load_lora(f"{OUTPUT_DIR}/grpo_saved_lora")
-    )[0].outputs[0].text
-
-    print(f"Sample output:\n{output}")
-
     # Save model with different quantization methods
     quantization_methods = ["f16", "q4_k_m", "q5_k_m", "q8_0"]
 

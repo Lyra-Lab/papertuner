@@ -1,4 +1,4 @@
-# experiment_script.py
+# dataset.py
 import os
 import json
 import time
@@ -10,7 +10,7 @@ import requests
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from datasets import Dataset, concatenate_datasets
-from huggingface_hub import create_repo, login
+from huggingface_hub import create_repo, login, HfApi
 from tenacity import retry, stop_after_attempt, wait_exponential
 import fitz  # PyMuPDF
 import arxiv
@@ -32,190 +32,190 @@ API_KEY = os.getenv("GEMINI_API_KEY") or "AIzaSyDP1tXAkNMw1caHcAIhOB4x9L0DyWMne5
 
 # Utility functions
 def setup_dirs():
-    try:
-        RAW_DIR.mkdir(parents=True, exist_ok=True)
-        PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-        (PROCESSED_DIR / "papers").mkdir(parents=True, exist_ok=True)
-        logging.info("Directories set up successfully.")
-        return True
-    except OSError as e:
-        logging.error(f"Failed to setup directories: {e}")
-        return False
+try:
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    (PROCESSED_DIR / "papers").mkdir(parents=True, exist_ok=True)
+    logging.info("Directories set up successfully.")
+    return True
+except OSError as e:
+    logging.error(f"Failed to setup directories: {e}")
+    return False
 
 def create_retry_strategy():
-    return retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+return retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 
 # OpenAI Client Setup
 def api_call(client, prompt, max_tokens=1500):
-    retry_strategy = create_retry_strategy()
-    @retry_strategy
-    def _api_call(client, prompt, max_tokens):
-        try:
-            response = client.chat.completions.create(
-                model="gemini-2.0-flash",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=max_tokens
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            logging.error(f"OpenAI API call failed: {e}")
-            raise  # Re-raise for retry to work
+retry_strategy = create_retry_strategy()
+@retry_strategy
+def _api_call(client, prompt, max_tokens):
+    try:
+        response = client.chat.completions.create(
+            model="gemini-2.0-flash",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=max_tokens
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logging.error(f"OpenAI API call failed: {e}")
+        raise  # Re-raise for retry to work
 
-    return _api_call(client, prompt, max_tokens)
+return _api_call(client, prompt, max_tokens)
 
 # Download and Process
 def has_been_processed(paper_id, processed_dir=PROCESSED_DIR):
-    """Check if a paper has already been downloaded and processed."""
-    processed_file = processed_dir / "papers" / f"paper_{paper_id.split('/')[-1]}.json"
+"""Check if a paper has already been downloaded and processed."""
+processed_file = processed_dir / "papers" / f"paper_{paper_id.split('/')[-1]}.json"
 
-    if processed_file.exists():
-        try:
-            with open(processed_file, 'r') as f:
-                data = json.load(f)
-                # Check for the new structure with multiple QA pairs
-                if (data.get("metadata") and data.get("sections") and
-                    (data.get("qa_pairs") or data.get("qa"))):
-                    logging.info(f"Paper {paper_id} already processed. Skipping.")
-                    return True
-        except (json.JSONDecodeError, IOError) as e:
-            logging.warning(f"Found existing but invalid processed file for {paper_id}: {e}")
-            return False
+if processed_file.exists():
+    try:
+        with open(processed_file, 'r') as f:
+            data = json.load(f)
+            # Check for the new structure with multiple QA pairs
+            if (data.get("metadata") and data.get("sections") and
+                (data.get("qa_pairs") or data.get("qa"))):
+                logging.info(f"Paper {paper_id} already processed. Skipping.")
+                return True
+    except (json.JSONDecodeError, IOError) as e:
+        logging.warning(f"Found existing but invalid processed file for {paper_id}: {e}")
+        return False
 
-    return False
+return False
 
 def extract_sections(text):
-    """Extract key sections from ML research papers with more flexible pattern matching."""
-    try:
-        # More comprehensive patterns for ML papers
-        # Problem/Introduction patterns
-        problem_patterns = [
-            r"(?:INTRODUCTION|BACKGROUND|PROBLEM STATEMENT|MOTIVATION|OVERVIEW).*?(?=\n\n[A-Z][A-Z\s]+\n)",
-            r"(?:1[\.\s]+INTRODUCTION|1[\.\s]+BACKGROUND|I[\.\s]+INTRODUCTION).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
-            r"(?:\n\nIntroduction\n|\n\nBackground\n|\n\nMotivation\n).*?(?=\n\n[A-Z][a-z])"
-        ]
-
-        # Methodology patterns
-        method_patterns = [
-            r"(?:METHODOLOGY|METHOD|APPROACH|EXPERIMENTAL DESIGN|PROPOSED METHOD|MODEL ARCHITECTURE|SYSTEM DESIGN|NETWORK ARCHITECTURE|IMPLEMENTATION|PROPOSED APPROACH).*?(?=\n\n[A-Z][A-Z\s]+\n)",
-            r"(?:[2-4][\.\s]+(?:METHODOLOGY|METHOD|APPROACH|PROPOSED|MODEL|ARCHITECTURE)).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
-            r"(?:\n\nMethodology\n|\n\nMethod\n|\n\nApproach\n|\n\nProposed method\n|\n\nArchitecture\n|\n\nModel\n|\n\nImplementation\n).*?(?=\n\n[A-Z][a-z])"
-        ]
-
-        # Results patterns
-        result_patterns = [
-            r"(?:RESULTS|EVALUATION|FINDINGS|EXPERIMENTS|EXPERIMENTAL RESULTS|PERFORMANCE|EVALUATION RESULTS).*?(?=\n\n[A-Z][A-Z\s]+\n)",
-            r"(?:[3-6][\.\s]+(?:RESULTS|EVALUATION|EXPERIMENTS|PERFORMANCE)).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
-            r"(?:\n\nResults\n|\n\nEvaluation\n|\n\nExperiments\n|\n\nPerformance\n|\n\nExperimental results\n).*?(?=\n\n[A-Z][a-z])"
-        ]
-
-        # Try all patterns for each section type
-        problem_text = ""
-        for pattern in problem_patterns:
-            match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-            if match:
-                problem_text = match.group(0)
-                break
-
-        method_text = ""
-        for pattern in method_patterns:
-            match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-            if match:
-                method_text = match.group(0)
-                break
-
-        result_text = ""
-        for pattern in result_patterns:
-            match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-            if match:
-                result_text = match.group(0)
-                break
-
-        # If we still don't have the methodology section, try a fallback approach
-        if not method_text:
-            # Look for sections that might contain methodology information
-            method_related_keywords = [
-                "architecture", "network", "model", "algorithm", "framework",
-                "implementation", "system", "approach", "design", "experiment"
-            ]
-
-            # Search for paragraphs with methodology-related content
-            paragraphs = re.split(r'\n\n+', text)
-            method_paragraphs = []
-
-            for paragraph in paragraphs:
-                # Check if paragraph is likely about methodology
-                if any(keyword in paragraph.lower() for keyword in method_related_keywords):
-                    if len(paragraph) > 100:  # Only include substantial paragraphs
-                        method_paragraphs.append(paragraph)
-
-            if method_paragraphs:
-                method_text = "\n\n".join(method_paragraphs[:3])  # Limit to first few relevant paragraphs
-
-        # If we identified any sections, return them
-        sections = {
-            "problem": problem_text.strip(),
-            "methodology": method_text.strip(),
-            "results": result_text.strip()
-        }
-
-        # Log which sections were found
-        found_sections = [k for k, v in sections.items() if v]
-        if found_sections:
-            logging.info(f"Extracted sections: {', '.join(found_sections)}")
-        else:
-            logging.warning("No sections extracted from paper")
-
-        return sections
-
-    except Exception as e:
-        logging.error(f"Error extracting core sections: {e}")
-        return {}
-
-def generate_qa(client, paper_data, sections, num_pairs=3):
-    """Generate multiple distinct QA pairs from a single research paper."""
-    abstract = paper_data.get("abstract", "")
-    problem = sections.get("problem", "")
-    methodology = sections.get("methodology", "")
-    results = sections.get("results", "")
-
-    # Extract key information about the paper
-    paper_domain = paper_data.get("categories", [""])[0]
-    paper_title = paper_data.get("title", "")
-
-    # Prepare context
-    context = f"""
-    Title: {paper_title}
-    Domain: {paper_domain}
-    Abstract: {abstract}
-    """
-
-    if problem:
-        context += f"\nProblem/Introduction: {problem[:500]}...\n"
-    if methodology:
-        context += f"\nMethodology/Approach: {methodology[:1000]}...\n"
-    if results:
-        context += f"\nResults: {results[:300]}...\n"
-
-    # Define question categories to ensure diversity
-    question_categories = [
-        "Architecture & Model Design",
-        "Implementation Strategy & Techniques",
-        "Training Approach & Optimization",
-        "Handling Specific Challenges",
-        "Adaptation & Transfer"
+"""Extract key sections from ML research papers with more flexible pattern matching."""
+try:
+    # More comprehensive patterns for ML papers
+    # Problem/Introduction patterns
+    problem_patterns = [
+        r"(?:INTRODUCTION|BACKGROUND|PROBLEM STATEMENT|MOTIVATION|OVERVIEW).*?(?=\n\n[A-Z][A-Z\s]+\n)",
+        r"(?:1[\.\s]+INTRODUCTION|1[\.\s]+BACKGROUND|I[\.\s]+INTRODUCTION).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
+        r"(?:\n\nIntroduction\n|\n\nBackground\n|\n\nMotivation\n).*?(?=\n\n[A-Z][a-z])"
     ]
 
-    # Define examples for each category
-    category_examples = {
-        "Architecture & Model Design": "How would you design the architecture for a model that needs to handle [SPECIFIC_REQUIREMENT] for [PROBLEM_TYPE]?",
-        "Implementation Strategy & Techniques": "What's the most effective approach to implement [TECHNIQUE] when facing [CONSTRAINT]?",
-        "Training Approach & Optimization": "How should one approach training a model for [TASK] when dealing with [DATA_CHALLENGE]?",
-        "Handling Specific Challenges": "What strategies would you recommend to address [SPECIFIC_CHALLENGE] in [DOMAIN]?",
-        "Adaptation & Transfer": "How would you adapt this approach to work in [DIFFERENT_DOMAIN] or with [DIFFERENT_REQUIREMENTS]?"
+    # Methodology patterns
+    method_patterns = [
+        r"(?:METHODOLOGY|METHOD|APPROACH|EXPERIMENTAL DESIGN|PROPOSED METHOD|MODEL ARCHITECTURE|SYSTEM DESIGN|NETWORK ARCHITECTURE|IMPLEMENTATION|PROPOSED APPROACH).*?(?=\n\n[A-Z][A-Z\s]+\n)",
+        r"(?:[2-4][\.\s]+(?:METHODOLOGY|METHOD|APPROACH|PROPOSED|MODEL|ARCHITECTURE)).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
+        r"(?:\n\nMethodology\n|\n\nMethod\n|\n\nApproach\n|\n\nProposed method\n|\n\nArchitecture\n|\n\nModel\n|\n\nImplementation\n).*?(?=\n\n[A-Z][a-z])"
+    ]
+
+    # Results patterns
+    result_patterns = [
+        r"(?:RESULTS|EVALUATION|FINDINGS|EXPERIMENTS|EXPERIMENTAL RESULTS|PERFORMANCE|EVALUATION RESULTS).*?(?=\n\n[A-Z][A-Z\s]+\n)",
+        r"(?:[3-6][\.\s]+(?:RESULTS|EVALUATION|EXPERIMENTS|PERFORMANCE)).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
+        r"(?:\n\nResults\n|\n\nEvaluation\n|\n\nExperiments\n|\n\nPerformance\n|\n\nExperimental results\n).*?(?=\n\n[A-Z][a-z])"
+    ]
+
+    # Try all patterns for each section type
+    problem_text = ""
+    for pattern in problem_patterns:
+        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+        if match:
+            problem_text = match.group(0)
+            break
+
+    method_text = ""
+    for pattern in method_patterns:
+        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+        if match:
+            method_text = match.group(0)
+            break
+
+    result_text = ""
+    for pattern in result_patterns:
+        match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
+        if match:
+            result_text = match.group(0)
+            break
+
+    # If we still don't have the methodology section, try a fallback approach
+    if not method_text:
+        # Look for sections that might contain methodology information
+        method_related_keywords = [
+            "architecture", "network", "model", "algorithm", "framework",
+            "implementation", "system", "approach", "design", "experiment"
+        ]
+
+        # Search for paragraphs with methodology-related content
+        paragraphs = re.split(r'\n\n+', text)
+        method_paragraphs = []
+
+        for paragraph in paragraphs:
+            # Check if paragraph is likely about methodology
+            if any(keyword in paragraph.lower() for keyword in method_related_keywords):
+                if len(paragraph) > 100:  # Only include substantial paragraphs
+                    method_paragraphs.append(paragraph)
+
+        if method_paragraphs:
+            method_text = "\n\n".join(method_paragraphs[:3])  # Limit to first few relevant paragraphs
+
+    # If we identified any sections, return them
+    sections = {
+        "problem": problem_text.strip(),
+        "methodology": method_text.strip(),
+        "results": result_text.strip()
     }
 
-    prompt = f"""You are an expert ML research advisor helping fellow researchers design approaches to solve challenging problems.
+    # Log which sections were found
+    found_sections = [k for k, v in sections.items() if v]
+    if found_sections:
+        logging.info(f"Extracted sections: {', '.join(found_sections)}")
+    else:
+        logging.warning("No sections extracted from paper")
+
+    return sections
+
+except Exception as e:
+    logging.error(f"Error extracting core sections: {e}")
+    return {}
+
+def generate_qa(client, paper_data, sections, num_pairs=3):
+"""Generate multiple distinct QA pairs from a single research paper."""
+abstract = paper_data.get("abstract", "")
+problem = sections.get("problem", "")
+methodology = sections.get("methodology", "")
+results = sections.get("results", "")
+
+# Extract key information about the paper
+paper_domain = paper_data.get("categories", [""])[0]
+paper_title = paper_data.get("title", "")
+
+# Prepare context
+context = f"""
+Title: {paper_title}
+Domain: {paper_domain}
+Abstract: {abstract}
+"""
+
+if problem:
+    context += f"\nProblem/Introduction: {problem[:500]}...\n"
+if methodology:
+    context += f"\nMethodology/Approach: {methodology[:1000]}...\n"
+if results:
+    context += f"\nResults: {results[:300]}...\n"
+
+# Define question categories to ensure diversity
+question_categories = [
+    "Architecture & Model Design",
+    "Implementation Strategy & Techniques",
+    "Training Approach & Optimization",
+    "Handling Specific Challenges",
+    "Adaptation & Transfer"
+]
+
+# Define examples for each category
+category_examples = {
+    "Architecture & Model Design": "How would you design the architecture for a model that needs to handle [SPECIFIC_REQUIREMENT] for [PROBLEM_TYPE]?",
+    "Implementation Strategy & Techniques": "What's the most effective approach to implement [TECHNIQUE] when facing [CONSTRAINT]?",
+    "Training Approach & Optimization": "How should one approach training a model for [TASK] when dealing with [DATA_CHALLENGE]?",
+    "Handling Specific Challenges": "What strategies would you recommend to address [SPECIFIC_CHALLENGE] in [DOMAIN]?",
+    "Adaptation & Transfer": "How would you adapt this approach to work in [DIFFERENT_DOMAIN] or with [DIFFERENT_REQUIREMENTS]?"
+}
+
+prompt = f"""You are an expert ML research advisor helping fellow researchers design approaches to solve challenging problems.
 Based on this research paper, create {min(num_pairs, 5)} DISTINCT technical research questions and detailed answers.
 
 {context}
@@ -251,26 +251,26 @@ A2: [Detailed answer to second question]
 ...and so on for {min(num_pairs, 5)} pairs.
 """
 
-    try:
-        response = api_call(client, prompt, max_tokens=4000)  # Increased token limit for multiple pairs
+try:
+    response = api_call(client, prompt, max_tokens=4000)  # Increased token limit for multiple pairs
 
-        # Parse multiple QA pairs from the response
-        qa_pairs = []
+    # Parse multiple QA pairs from the response
+    qa_pairs = []
 
-        # Split the response into chunks by question markers (Q1:, Q2:, etc.)
-        # First, find all instances of 'Q1:', 'Q2:', etc.
-        q_markers = [f"Q{i}:" for i in range(1, num_pairs+1)]
+    # Split the response into chunks by question markers (Q1:, Q2:, etc.)
+    # First, find all instances of 'Q1:', 'Q2:', etc.
+    q_markers = [f"Q{i}:" for i in range(1, num_pairs+1)]
 
-        for i, q_marker in enumerate(q_markers):
-            q_start = response.find(q_marker)
-            if q_start == -1:
-                continue  # This question marker not found
+    for i, q_marker in enumerate(q_markers):
+        q_start = response.find(q_marker)
+        if q_start == -1:
+            continue  # This question marker not found
 
-            # Find the corresponding answer marker
-            a_marker = f"A{i+1}:"
-            a_start = response.find(a_marker, q_start)
-            if a_start == -1:
-                continue  # Answer marker not found
+        # Find the corresponding answer marker
+        a_marker = f"A{i+1}:"
+        a_start = response.find(a_marker, q_start)
+        if a_start == -1:
+            continue  # Answer marker not found
 
             # Find the end of this QA pair (start of next question or end of string)
             next_q_marker = f"Q{i+2}:" if i+1 < len(q_markers) else None

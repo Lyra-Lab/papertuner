@@ -4,8 +4,6 @@ from transformers import TrainingArguments
 from trl import GRPOTrainer
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
-import torch
 import logging
 import os
 
@@ -17,55 +15,42 @@ MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 DATASET_REPO = "densud2/ml_qa_dataset"
 OUTPUT_DIR = "output/rl_finetuned"
 HF_MODEL_NAME = "username/grpo_finetuned_model"  # Replace 'username' with your Hugging Face username
-HF_TOKEN = ""  # Your Hugging Face token, get it from https://huggingface.co/settings/tokens
+HF_TOKEN = os.environ.get("HF_TOKEN")  # Your Hugging Face token, get it from https://huggingface.co/settings/tokens
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Define system prompt
 SYSTEM_PROMPT = """You are an expert PhD-level research assistant that helps researchers design optimal methodologies.
 Provide detailed, technical advice that explains both how to implement a methodology and why it's appropriate.
-Structure your response with clear reasoning and a specific approach."""
+Use <think></think> tags to show your reasoning process, and then provide a clear conclusion."""
 
-def extract_xml_approach(text):
-    if "<approach>" not in text or "</approach>" not in text:
+def extract_thinking(text):
+    if "<think>" not in text or "</think>" not in text:
         return ""
-    approach = text.split("<approach>")[-1].split("</approach>")[0].strip()
-    return approach
+    thinking = text.split("<think>")[-1].split("</think>")[0].strip()
+    return thinking
 
-def extract_xml_reasoning(text):
-    if "<reasoning>" not in text or "</reasoning>" not in text:
-        return ""
-    reasoning = text.split("<reasoning>")[-1].split("</reasoning>")[0].strip()
-    return reasoning
-
-# Initialize models (do this once)
+# Initialize the SentenceTransformer model for semantic similarity
 st_model = SentenceTransformer('all-mpnet-base-v2')
-nli_model = AutoModelForSequenceClassification.from_pretrained('roberta-large-mnli')
-nli_tokenizer = AutoTokenizer.from_pretrained('roberta-large-mnli')
-
 def semantic_similarity(generated, reference):
     embeddings = st_model.encode([generated, reference])
     similarity = cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
     return (similarity + 1) / 2
 
-def factual_verification(reference, generated):
-    inputs = nli_tokenizer(reference, generated, return_tensors='pt', truncation=True, max_length=512)
-    with torch.no_grad():
-        outputs = nli_model(**inputs)
-    probs = torch.softmax(outputs.logits, dim=1)
-    return probs[:, 2].item()
-
-def calculate_reward(generated, reference):
-    sem_sim = semantic_similarity(generated, reference)
-    fact_ver = factual_verification(reference, generated)
-    return 0.6 * sem_sim + 0.4 * fact_ver
+def verify_output_format(generated):
+    """Verify if the generated text contains the required thinking tags."""
+    has_thinking = "<think>" in generated and "</think>" in generated
+    return has_thinking
 
 def composite_reward(completions, references, **kwargs):
     """Composite reward for a list of completions and their corresponding references."""
     rewards = []
     for completion, reference in zip(completions, references):
         response = completion[0]["content"]
-        reward = calculate_reward(response, reference)
+        if not verify_output_format(response):
+            rewards.append(0.0)  # Penalize if the output format is incorrect
+            continue
+        reward = semantic_similarity(response, reference)
         rewards.append(reward)
     return rewards
 

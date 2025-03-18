@@ -117,16 +117,22 @@ def main():
         max_lora_rank=32,
     )
 
-    model = FastLanguageModel.get_peft_model(
+    model = FastLanguageModel.get_peft_model(  # Configure LoRA
         model,
-        r=32,  # LoRA rank
+        r=32,
         target_modules=[
             "q_proj", "k_proj", "v_proj", "o_proj",
             "gate_proj", "up_proj", "down_proj",
         ],
         lora_alpha=32,
-        use_gradient_checkpointing="unsloth",
+        use_gradient_checkpointing=True,
     )
+
+    # 📌 Key fix: Add missing attribute to model
+    model.supported_lora_modules = [
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj"
+    ]
 
     # Training arguments
     training_args = TrainingArguments(

@@ -1,10 +1,9 @@
 # src/train.py
 import os
-import json
 import logging
 import torch
 from pathlib import Path
-from datasets import Dataset
+from datasets import load_dataset
 from unsloth import FastLanguageModel
 from trl import GRPOConfig, GRPOTrainer
 import re
@@ -13,9 +12,9 @@ import re
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Constants
-PROCESSED_DIR = Path("data/processed_dataset")
 MODEL_OUTPUT_DIR = Path("data/trained_model")
 LORA_OUTPUT_DIR = Path("data/lora_weights")
+DATASET_ID = "densud2/ml_qa_dataset"  # Your published dataset
 
 def setup_dirs():
     """Create necessary directories for model training."""
@@ -28,98 +27,73 @@ def setup_dirs():
         logging.error(f"Failed to setup training directories: {e}")
         return False
 
-def load_dataset_from_papers():
-    """Load processed papers and prepare dataset for training."""
-    processed_files = list((PROCESSED_DIR / "papers").glob("paper_*.json"))
-    if not processed_files:
-        raise FileNotFoundError(f"No processed files found in {PROCESSED_DIR / 'papers'}")
-
-    logging.info(f"Found {len(processed_files)} paper files for training")
-
-    # Prepare dataset for training
-    dataset_items = []
-
-    # Define system prompt for the research assistant
-    SYSTEM_PROMPT = """
-    You are a PhD-level research assistant specialized in helping researchers design optimal methodologies.
-    Given a research problem, literature review, and hypothesis, predict the most appropriate methodology.
-
-    Respond in the following format:
-    <reasoning>
-    Step through your thought process, considering multiple methodological approaches, their advantages,
-    disadvantages, and appropriateness for the specific research context. Analyze potential confounding
-    variables and how different methods might address them.
-    </reasoning>
-    <approach>
-    Clearly state the recommended methodology with justification.
-    </approach>
-    """
-
+def load_dataset_from_huggingface():
+    """Load the research methodology dataset from Hugging Face."""
     try:
-        for file in processed_files:
-            with open(file, "r") as f:
-                data = json.load(f)
+        # Load the dataset directly from Hugging Face
+        dataset = load_dataset(DATASET_ID)
+        logging.info(f"Successfully loaded dataset from {DATASET_ID}")
 
-                # Handle papers with multiple QA pairs
-                if "qa_pairs" in data and isinstance(data["qa_pairs"], list):
-                    for qa in data["qa_pairs"]:
-                        if qa.get("question") and qa.get("answer"):
-                            # Format the research problem from the question
-                            problem_statement = f"Problem: {qa['question']}\n\n"
+        # If the dataset has splits, get the training split
+        if isinstance(dataset, dict) and "train" in dataset:
+            dataset = dataset["train"]
+            logging.info(f"Using train split with {len(dataset)} examples")
 
-                            # Add literature context if available
-                            literature = ""
-                            if "sections" in data and data["sections"].get("problem"):
-                                literature = f"Literature Review: {data['sections']['problem'][:300]}...\n\n"
+        # Define system prompt for the research assistant
+        SYSTEM_PROMPT = """
+        You are a PhD-level research assistant specialized in helping researchers design optimal methodologies.
+        Given a research problem, literature review, and hypothesis, predict the most appropriate methodology.
 
-                            # Add hypothesis if we can extract it
-                            hypothesis = ""
-                            if "sections" in data and data["sections"].get("methodology"):
-                                hypothesis = f"Hypothesis: Based on the methodology, we expect that {data['sections']['methodology'][:100]}...\n\n"
+        Respond in the following format:
+        <reasoning>
+        Step through your thought process, considering multiple methodological approaches, their advantages,
+        disadvantages, and appropriateness for the specific research context. Analyze potential confounding
+        variables and how different methods might address them.
+        </reasoning>
+        <approach>
+        Clearly state the recommended methodology with justification.
+        </approach>
+        """
 
-                            # User prompt combining problem, literature, and hypothesis
-                            user_content = problem_statement + literature + hypothesis
+        # Transform the dataset into the format required for GRPO training
+        formatted_dataset = []
 
-                            # Use answer as the correct approach
-                            correct_approach = qa["answer"]
+        for item in dataset:
+            # Format user content from question and any additional context
+            question = item["question"]
 
-                            dataset_items.append({
-                                "prompt": [
-                                    {"role": "system", "content": SYSTEM_PROMPT},
-                                    {"role": "user", "content": user_content}
-                                ],
-                                "correct_approach": correct_approach
-                            })
+            # Create a structured problem statement from the question
+            user_content = f"Problem: {question}\n\n"
 
-                # Handle legacy format with a single QA pair
-                elif "qa" in data and data["qa"].get("question") and data["qa"].get("answer"):
-                    # Similar formatting as above for legacy data
-                    problem_statement = f"Problem: {data['qa']['question']}\n\n"
+            # Add any additional context if available in the dataset
+            if "paper_title" in item:
+                user_content += f"Research Context: {item['paper_title']}\n\n"
 
-                    literature = ""
-                    if "sections" in data and data["sections"].get("problem"):
-                        literature = f"Literature Review: {data['sections']['problem'][:300]}...\n\n"
+            if "categories" in item:
+                categories = item["categories"]
+                if isinstance(categories, list) and categories:
+                    user_content += f"Domain: {', '.join(categories)}\n\n"
 
-                    hypothesis = ""
-                    if "sections" in data and data["sections"].get("methodology"):
-                        hypothesis = f"Hypothesis: Based on the methodology, we expect that {data['sections']['methodology'][:100]}...\n\n"
+            # Add a simple hypothesis section if not already in the question
+            if "hypothesis" not in question.lower():
+                user_content += "Hypothesis: Based on the research context, we aim to determine the most effective approach.\n\n"
 
-                    user_content = problem_statement + literature + hypothesis
-                    correct_approach = data["qa"]["answer"]
+            # Use the answer as the correct approach
+            correct_approach = item["answer"]
 
-                    dataset_items.append({
-                        "prompt": [
-                            {"role": "system", "content": SYSTEM_PROMPT},
-                            {"role": "user", "content": user_content}
-                        ],
-                        "correct_approach": correct_approach
-                    })
+            formatted_dataset.append({
+                "prompt": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content}
+                ],
+                "correct_approach": correct_approach
+            })
 
-        logging.info(f"Created dataset with {len(dataset_items)} training examples")
-        return Dataset.from_list(dataset_items)
+        logging.info(f"Created formatted dataset with {len(formatted_dataset)} training examples")
+        return formatted_dataset
 
     except Exception as e:
-        logging.error(f"Error preparing dataset: {e}")
+        logging.error(f"Error loading dataset from Hugging Face: {e}")
         raise
 
 def extract_approach(text: str) -> str:
@@ -146,8 +120,10 @@ def approach_similarity_reward(completions, correct_approach, **kwargs) -> list[
         else:
             rewards.append(0.0)
 
-    if rewards:
-        logging.info(f"Approach similarity reward: {rewards[0]:.4f}")
+    # Print example for debugging (only occasionally to avoid log spam)
+    if rewards and kwargs.get("step", 0) % 20 == 0:
+        logging.info(f"Sample reward: {rewards[0]:.4f}")
+        logging.info(f"Sample approach (extract): {extracted_approaches[0][:100]}...")
 
     return rewards
 
@@ -195,9 +171,13 @@ def reasoning_depth_reward(completions, **kwargs) -> list[float]:
 
     return rewards
 
-def train_model(dataset):
+def train_model(dataset_items):
     """Train the research assistant model using GRPO."""
     logging.info("Initializing model training")
+
+    # Convert list to Dataset object
+    from datasets import Dataset
+    dataset = Dataset.from_list(dataset_items)
 
     # Model configuration
     max_seq_length = 2048  # Longer for scientific reasoning traces
@@ -345,11 +325,11 @@ def main():
         return
 
     try:
-        # Load dataset from processed papers
-        dataset = load_dataset_from_papers()
+        # Load dataset directly from Hugging Face
+        dataset_items = load_dataset_from_huggingface()
 
         # Train the model
-        model_info = train_model(dataset)
+        model_info = train_model(dataset_items)
 
         # Test the model with a sample query
         test_query = """

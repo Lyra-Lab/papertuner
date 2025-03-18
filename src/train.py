@@ -1,3 +1,4 @@
+# Fix for the TypeError with reference_column
 from datasets import load_dataset
 from unsloth import FastLanguageModel
 from transformers import TrainingArguments
@@ -70,7 +71,7 @@ def load_and_format_dataset():
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": example["question"]}
             ],
-            "original_answer": example["answer"]
+            "reference": example["answer"]  # Renamed to match what we'll use in the trainer
         }
 
     return dataset.map(format_example)
@@ -112,6 +113,7 @@ def main():
     )
 
     # Initialize GRPO trainer
+    # Remove the reference_column parameter and ensure dataset has "reference" column
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
@@ -121,7 +123,6 @@ def main():
         args=training_args,
         train_dataset=dataset,
         eval_dataset=dataset,  # Ensure you have an eval dataset if needed
-        reference_column="original_answer",  # Add reference column for reward calculation
     )
 
     # Train

@@ -1,3 +1,5 @@
+# Modified train.py to fix the 'supported_lora_modules' attribute issue
+
 from datasets import load_dataset
 from unsloth import FastLanguageModel
 from transformers import TrainingArguments
@@ -117,22 +119,30 @@ def main():
         max_lora_rank=32,
     )
 
+    # Define the target modules for LoRA
+    target_modules = [
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj",
+    ]
+
     model = FastLanguageModel.get_peft_model(  # Configure LoRA
         model,
         r=32,
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ],
+        target_modules=target_modules,
         lora_alpha=32,
         use_gradient_checkpointing=True,
     )
 
-    # 📌 Key fix: Add missing attribute to model
-    model.supported_lora_modules = [
-        "q_proj", "k_proj", "v_proj", "o_proj",
-        "gate_proj", "up_proj", "down_proj"
-    ]
+    # Add the supported_lora_modules attribute to all places it might be needed
+    model.supported_lora_modules = target_modules
+
+    # Make sure the attribute is also added to the base model
+    if hasattr(model, "base_model") and hasattr(model.base_model, "model"):
+        model.base_model.model.supported_lora_modules = target_modules
+
+    # If there's a direct model attribute
+    if hasattr(model, "model"):
+        model.model.supported_lora_modules = target_modules
 
     # Training arguments
     training_args = TrainingArguments(
@@ -156,6 +166,14 @@ def main():
         train_dataset=dataset,
         eval_dataset=dataset.select(range(min(100, len(dataset)))),  # Smaller eval dataset
     )
+
+    # Apply the attribute to the trainer's model as well
+    if hasattr(trainer, "model"):
+        trainer.model.supported_lora_modules = target_modules
+        if hasattr(trainer.model, "base_model") and hasattr(trainer.model.base_model, "model"):
+            trainer.model.base_model.model.supported_lora_modules = target_modules
+        if hasattr(trainer.model, "model"):
+            trainer.model.model.supported_lora_modules = target_modules
 
     # Train
     trainer.train()

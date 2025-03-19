@@ -1,5 +1,5 @@
 from datasets import load_dataset
-from unsloth import FastLanguageModel
+from unsloth import FastLanguageModel, is_bfloat16_supported
 from trl import GRPOConfig, GRPOTrainer
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -40,6 +40,24 @@ def verify_output_format(generated):
     """Verify if the generated text contains the required thinking tags."""
     has_thinking = "<think>" in generated and "</think>" in generated
     return has_thinking
+
+# Reward function that counts the presence of think tags
+def count_think_tags(text) -> float:
+    count = 0.0
+    if text.count("<think>") == 1:
+        count += 0.25
+    if text.count("</think>") == 1:
+        count += 0.25
+    return count
+
+# Think tags format verification
+def think_format_reward_func(completions, **kwargs) -> list[float]:
+    """Reward function that checks if the completion has think tags."""
+    pattern = r"<think>.*?</think>"
+    import re
+    responses = [completion[0]["content"] for completion in completions]
+    matches = [bool(re.search(pattern, r, re.DOTALL)) for r in responses]
+    return [0.5 if match else 0.0 for match in matches]
 
 # Updated composite reward function that matches GRPOTrainer's expected signature
 def composite_reward(prompts=None, completions=None, **kwargs):
@@ -133,6 +151,7 @@ def main():
     # Training arguments using GRPOConfig directly
     max_prompt_length = 256
     training_args = GRPOConfig(
+        use_vllm=True,  # This is the key fix for Qwen models!
         learning_rate=5e-6,
         adam_beta1=0.9,
         adam_beta2=0.99,
@@ -151,13 +170,18 @@ def main():
         max_grad_norm=0.1,
         report_to="none",
         output_dir=OUTPUT_DIR,
+        bf16=is_bfloat16_supported(),
+        fp16=not is_bfloat16_supported(),
     )
 
     # Initialize GRPO trainer directly
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
-        reward_funcs=[composite_reward],
+        reward_funcs=[
+            composite_reward,
+            think_format_reward_func,  # Added to explicitly reward <think> tags
+        ],
         args=training_args,
         train_dataset=dataset,
     )

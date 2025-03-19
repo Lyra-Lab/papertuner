@@ -7,6 +7,7 @@ from trl import GRPOConfig, GRPOTrainer
 from vllm import SamplingParams
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+import random
 
 max_seq_length = 1024  # Can increase for longer reasoning traces
 lora_rank = 64  # Larger rank = smarter, but slower
@@ -119,8 +120,13 @@ def semantic_similarity_reward_func(prompts=None, completions=None, **kwargs):
             continue
 
         # Encode the response and reference
-        embeddings = model_embedding.encode([response, reference])
-        reward = cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
+        try:
+            embeddings = model_embedding.encode([response, reference])
+            reward = cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
+        except Exception as e:
+            print(f"Error during embedding calculation: {e}")
+            reward = 0.0
+
         rewards.append(reward)
 
     return rewards
@@ -132,6 +138,57 @@ def think_format_reward_func(completions, **kwargs) -> list[float]:
     matches = [bool(re.search(pattern, r, re.DOTALL)) for r in responses]
     return [0.5 if match else 0.0 for match in matches]
 
+# Debugging function
+def debug_reward_functions(model, tokenizer, dataset, num_samples=3):
+    """
+    Debug reward functions by generating completions and calculating rewards.
+    """
+    print("Debugging Reward Functions...")
+    # Ensure the model's LoRA is loaded
+    if not model.peft_config:
+        print("Warning: LoRA not loaded. Loading LoRA now...")
+        model.load_lora("grpo_saved_lora")
+
+    # Sample data from the dataset
+    sample_indices = random.sample(range(len(dataset)), num_samples)
+    sample_data = dataset.select(sample_indices)
+    prompts = [sample_data[i]['prompt'] for i in range(num_samples)]
+    references = [sample_data[i]['reference'] for i in range(num_samples)]
+
+    # Generate responses using the model
+    sampling_params = SamplingParams(
+        temperature=0.8,
+        top_p=0.95,
+        max_tokens=200,  # Reduced for debugging
+    )
+    try:
+        outputs = model.fast_generate(
+            [tokenizer.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True) for prompt in prompts],
+            sampling_params=sampling_params,
+            lora_request=model.load_lora("grpo_saved_lora"), # Ensure LoRA is loaded
+        )
+    except Exception as e:
+        print(f"Error during generation: {e}")
+        return
+
+    # Extract responses
+    completions = [[{"role": "assistant", "content": output.outputs[0].text}] for output in outputs]
+
+    # Print samples
+    for i, (completion, reference) in enumerate(zip(completions, references)):
+        print(f"Sample {i+1}:")
+        print(f"  Prompt: {prompts[i]}")
+        print(f"  Completion: {completion[0]['content']}")
+        print(f"  Reference: {reference}")
+
+    # Calculate rewards
+    sem_rewards = semantic_similarity_reward_func(None, completions, train_dataset=dataset, batch_indices=sample_indices)
+    think_rewards = think_format_reward_func(completions)
+
+    # Print rewards
+    for i, (sem_reward, think_reward) in enumerate(zip(sem_rewards, think_rewards)):
+        print(f"Sample {i+1}: Semantic Reward {sem_reward:.4f}, Think Format Reward {think_reward:.4f}")
+    print("Debugging Complete.\n")
 # Set up GRPO Trainer configurations
 training_args = GRPOConfig(
     use_vllm=True,  # Use vLLM for fast inference!
@@ -159,6 +216,7 @@ training_args = GRPOConfig(
 )
 
 # Initialize and run the trainer with our custom reward functions
+print("Initializing GRPOTrainer...")
 trainer = GRPOTrainer(
     model=model,
     processing_class=tokenizer,
@@ -169,7 +227,13 @@ trainer = GRPOTrainer(
     args=training_args,
     train_dataset=dataset,
 )
+
+# Debug before training
+debug_reward_functions(model, tokenizer, dataset, num_samples=3)
+
+print("Starting Training...")
 trainer.train()
+print("Training Complete.")
 
 # Save the LoRA weights
 model.save_lora("grpo_saved_lora")
@@ -190,9 +254,9 @@ output = model.fast_generate(
     text,
     sampling_params=sampling_params,
     lora_request=model.load_lora("grpo_saved_lora"),
-)[0].outputs[0].text
+)
 
-print(output)
+print(output[0].outputs[0].text)
 
 # Save to GGUF format if needed
 if HF_TOKEN:

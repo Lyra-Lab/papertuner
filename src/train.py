@@ -1,65 +1,109 @@
-from datasets import load_dataset
 from unsloth import FastLanguageModel, is_bfloat16_supported
-from trl import GRPOConfig, GRPOTrainer
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-import logging
+import torch
 import os
+import re
+from datasets import load_dataset, Dataset
+from trl import GRPOConfig, GRPOTrainer
+from vllm import SamplingParams
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+max_seq_length = 1024 # Can increase for longer reasoning traces
+lora_rank = 64 # Larger rank = smarter, but slower
 
-# Constants
 MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
 DATASET_REPO = "densud2/ml_qa_dataset"
 OUTPUT_DIR = "output/rl_finetuned"
 HF_MODEL_NAME = "username/grpo_finetuned_model"  # Replace 'username' with your Hugging Face username
 HF_TOKEN = os.environ.get("HF_TOKEN")  # Your Hugging Face token, get it from https://huggingface.co/settings/tokens
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = MODEL_NAME,
+    max_seq_length = max_seq_length,
+    load_in_4bit = True, # False for LoRA 16bit
+    fast_inference = True, # Enable vLLM fast inference
+    max_lora_rank = lora_rank,
+    gpu_memory_utilization = 0.5, # Reduce if out of memory
+)
 
-# Define system prompt
-SYSTEM_PROMPT = """You are an expert PhD-level research assistant that helps researchers design optimal methodologies.
-Provide detailed, technical advice that explains both how to implement a methodology and why it's appropriate.
-Use <think></think> tags to show your reasoning process, and then provide a clear conclusion."""
+model = FastLanguageModel.get_peft_model(
+    model,
+    r = lora_rank, # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
+    target_modules = [
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj",
+    ], # Remove QKVO if out of memory
+    lora_alpha = lora_rank,
+    use_gradient_checkpointing = "unsloth", # Enable long context finetuning
+    random_state = 3407,
+)
 
-def extract_thinking(text):
-    if "<think>" not in text or "</think>" not in text:
-        return ""
-    thinking = text.split("<think>")[-1].split("</think>")[0].strip()
-    return thinking
+# System prompt and format definitions
+SYSTEM_PROMPT = """
+Respond in the following format:
+<think>
+Write your reasoning step-by-step here. This section should contain your thought process.
+</think>
+<answer>
+Write your final answer here.
+</answer>
+"""
 
-# Initialize the SentenceTransformer model for semantic similarity
-st_model = SentenceTransformer('all-mpnet-base-v2')
-def semantic_similarity(generated, reference):
-    embeddings = st_model.encode([generated, reference])
-    similarity = cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
-    return (similarity + 1) / 2
+XML_COT_FORMAT = """\
+<think>
+{reasoning}
+</think>
+<answer>
+{answer}
+</answer>
+"""
 
-def verify_output_format(generated):
-    """Verify if the generated text contains the required thinking tags."""
-    has_thinking = "<think>" in generated and "</think>" in generated
-    return has_thinking
+def extract_xml_answer(text: str) -> str:
+    """Extract the answer from XML tags in the text."""
+    answer = text.split("<answer>")[-1]
+    answer = answer.split("</answer>")[0]
+    return answer.strip()
 
-# Reward function that counts the presence of think tags
-def count_think_tags(text) -> float:
-    count = 0.0
-    if text.count("<think>") == 1:
-        count += 0.25
-    if text.count("</think>") == 1:
-        count += 0.25
-    return count
+def verify_output_format(text: str) -> bool:
+    """Verify if the output follows the expected format with think and answer tags."""
+    pattern = r"<think>.*?</think>\s*<answer>.*?</answer>"
+    return bool(re.search(pattern, text, re.DOTALL))
 
-# Think tags format verification
-def think_format_reward_func(completions, **kwargs) -> list[float]:
-    """Reward function that checks if the completion has think tags."""
-    pattern = r"<think>.*?</think>"
-    import re
-    responses = [completion[0]["content"] for completion in completions]
-    matches = [bool(re.search(pattern, r, re.DOTALL)) for r in responses]
-    return [0.5 if match else 0.0 for match in matches]
+# Load ML QA dataset from Hugging Face
+def get_ml_qa_dataset(split="train"):
+    # Load the dataset from Hugging Face
+    data = load_dataset(DATASET_REPO, split=split)
 
-# Updated composite reward function that matches GRPOTrainer's expected signature
+    # Format it for training
+    data = data.map(lambda x: {
+        'prompt': [
+            {'role': 'system', 'content': SYSTEM_PROMPT},
+            {'role': 'user', 'content': x['question']}
+        ],
+        'reference': x['answer']
+    })
+    return data
+
+# Replace the GSM8K dataset with ML QA dataset
+dataset = get_ml_qa_dataset()
+
+# Reward functions
+def semantic_similarity(text1, text2):
+    """
+    Calculate semantic similarity between two texts.
+    A simple implementation that could be replaced with more sophisticated NLP methods.
+    """
+    # For a basic similarity, let's count common words (this is a simplification)
+    words1 = set(text1.lower().split())
+    words2 = set(text2.lower().split())
+
+    if not words1 or not words2:
+        return 0.0
+
+    # Jaccard similarity
+    intersection = len(words1.intersection(words2))
+    union = len(words1.union(words2))
+
+    return intersection / union if union > 0 else 0.0
+
 def composite_reward(prompts=None, completions=None, **kwargs):
     """Reward function that conforms to GRPO's expected interface.
 
@@ -99,116 +143,127 @@ def composite_reward(prompts=None, completions=None, **kwargs):
 
     return rewards
 
-def load_and_format_dataset():
-    # Load dataset from Hugging Face
-    try:
-        dataset = load_dataset(DATASET_REPO)["train"]
-        logging.info(f"Loaded {len(dataset)} examples from HF dataset")
-    except Exception as e:
-        logging.error(f"Failed to load dataset: {e}")
-        raise
+def think_format_reward_func(completions, **kwargs) -> list[float]:
+    """Reward function that checks if the completion has think tags."""
+    pattern = r"<think>.*?</think>"
+    responses = [completion[0]["content"] for completion in completions]
+    matches = [bool(re.search(pattern, r, re.DOTALL)) for r in responses]
+    return [0.5 if match else 0.0 for match in matches]
 
-    # Format for instruction tuning
-    def format_example(example):
-        return {
-            "prompt": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": example["question"]}
-            ],
-            "reference": example["answer"]  # Used by the reward function
-        }
+def count_xml(text) -> float:
+    """Count XML tags and return a score based on their presence."""
+    count = 0.0
+    if text.count("<think>") == 1:
+        count += 0.125
+    if text.count("</think>") == 1:
+        count += 0.125
+    if text.count("<answer>") == 1:
+        count += 0.125
+        count -= len(text.split("</answer>")[-1])*0.001
+    if text.count("</answer>") == 1:
+        count += 0.125
+        count -= (len(text.split("</answer>")[-1]) - 1)*0.001
+    return count
 
-    return dataset.map(format_example)
+def xmlcount_reward_func(completions, **kwargs) -> list[float]:
+    """Reward function that checks for presence of XML tags."""
+    contents = [completion[0]["content"] for completion in completions]
+    return [count_xml(c) for c in contents]
 
-# Main training function
-def main():
-    # Load dataset
-    dataset = load_and_format_dataset()
+def soft_format_reward_func(completions, **kwargs) -> list[float]:
+    """Reward function that checks if the completion has the expected format."""
+    pattern = r"<think>.*?</think>\s*<answer>.*?</answer>"
+    responses = [completion[0]["content"] for completion in completions]
+    matches = [bool(re.search(pattern, r, re.DOTALL)) for r in responses]
+    return [0.5 if match else 0.0 for match in matches]
 
-    # Initialize model with LoRA
-    model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=MODEL_NAME,
-        max_seq_length=1024,
-        load_in_4bit=True,
-        fast_inference=True,
-        max_lora_rank=32,
-        gpu_memory_utilization=0.6,  # Reduce if OOM
+def strict_format_reward_func(completions, **kwargs) -> list[float]:
+    """Reward function that strictly checks if the completion has the expected format."""
+    pattern = r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>\n$"
+    responses = [completion[0]["content"] for completion in completions]
+    matches = [bool(re.match(pattern, r, re.DOTALL)) for r in responses]
+    return [0.5 if match else 0.0 for match in matches]
+
+def ml_domain_reward_func(completions, **kwargs) -> list[float]:
+    """Reward function that checks if the completion uses ML terminology appropriately."""
+    ml_keywords = ["model", "architecture", "training", "layer", "optimization",
+                  "gradient", "parameter", "hyperparameter", "loss function"]
+
+    responses = [completion[0]["content"] for completion in completions]
+    return [0.3 * sum(keyword in response.lower() for keyword in ml_keywords) / len(ml_keywords)
+            for response in responses]
+
+# Set up GRPO Trainer configurations
+training_args = GRPOConfig(
+    use_vllm = True, # use vLLM for fast inference!
+    learning_rate = 5e-6,
+    adam_beta1 = 0.9,
+    adam_beta2 = 0.99,
+    weight_decay = 0.1,
+    warmup_ratio = 0.1,
+    lr_scheduler_type = "cosine",
+    optim = "adamw_8bit",
+    logging_steps = 1,
+    bf16 = is_bfloat16_supported(),
+    fp16 = not is_bfloat16_supported(),
+    per_device_train_batch_size = 1,
+    gradient_accumulation_steps = 1, # Increase to 4 for smoother training
+    num_generations = 8, # Decrease if out of memory
+    max_prompt_length = 256,
+    max_completion_length = 200,
+    # num_train_epochs = 1, # Set to 1 for a full training run
+    max_steps = 250,
+    save_steps = 250,
+    max_grad_norm = 0.1,
+    report_to = "none", # Can use Weights & Biases
+    output_dir = OUTPUT_DIR,
+)
+
+# Initialize and run the trainer with our custom reward functions
+trainer = GRPOTrainer(
+    model = model,
+    processing_class = tokenizer,
+    reward_funcs = [
+        xmlcount_reward_func,
+        soft_format_reward_func,
+        strict_format_reward_func,
+        think_format_reward_func,
+        ml_domain_reward_func,
+        composite_reward,
+    ],
+    args = training_args,
+    train_dataset = dataset,
+)
+trainer.train()
+
+# Save the LoRA weights
+model.save_lora("grpo_saved_lora")
+
+# Test the model with a sample question
+text = tokenizer.apply_chat_template([
+    {"role" : "system", "content" : SYSTEM_PROMPT},
+    {"role" : "user", "content" : "What are the advantages of using attention mechanisms in neural networks?"},
+], tokenize = False, add_generation_prompt = True)
+
+# Generate a response with the fine-tuned model
+sampling_params = SamplingParams(
+    temperature = 0.8,
+    top_p = 0.95,
+    max_tokens = 1024,
+)
+output = model.fast_generate(
+    text,
+    sampling_params = sampling_params,
+    lora_request = model.load_lora("grpo_saved_lora"),
+)[0].outputs[0].text
+
+print(output)
+
+# Save to GGUF format if needed
+if HF_TOKEN:
+    model.push_to_hub_gguf(
+        HF_MODEL_NAME,
+        tokenizer,
+        quantization_method = "q4_k_m",
+        token = HF_TOKEN,
     )
-
-    # Configure LoRA
-    model = FastLanguageModel.get_peft_model(
-        model,
-        r=32,
-        target_modules=[
-            "q_proj", "k_proj", "v_proj", "o_proj",
-            "gate_proj", "up_proj", "down_proj",
-        ],
-        lora_alpha=32,
-        use_gradient_checkpointing="unsloth",  # Enable long context finetuning
-        random_state=3407,
-    )
-
-    # Training arguments using GRPOConfig directly
-    max_prompt_length = 256
-    training_args = GRPOConfig(
-        use_vllm=True,  # This is the key fix for Qwen models!
-        learning_rate=5e-6,
-        adam_beta1=0.9,
-        adam_beta2=0.99,
-        weight_decay=0.1,
-        warmup_ratio=0.1,
-        lr_scheduler_type="cosine",
-        optim="paged_adamw_8bit",
-        logging_steps=10,
-        per_device_train_batch_size=1,
-        gradient_accumulation_steps=1,
-        num_generations=4,  # Decrease if out of memory
-        max_prompt_length=max_prompt_length,
-        max_completion_length=1024 - max_prompt_length,
-        max_steps=250,
-        save_steps=100,
-        max_grad_norm=0.1,
-        report_to="none",
-        output_dir=OUTPUT_DIR,
-        bf16=is_bfloat16_supported(),
-        fp16=not is_bfloat16_supported(),
-    )
-
-    # Initialize GRPO trainer directly
-    trainer = GRPOTrainer(
-        model=model,
-        processing_class=tokenizer,
-        reward_funcs=[
-            composite_reward,
-            think_format_reward_func,  # Added to explicitly reward <think> tags
-        ],
-        args=training_args,
-        train_dataset=dataset,
-    )
-
-    # Train
-    trainer.train()
-
-    # Save the LoRA first
-    model.save_lora(f"{OUTPUT_DIR}/grpo_saved_lora")
-
-    # Save model with different quantization methods
-    model.save_pretrained_merged(f"{OUTPUT_DIR}/final_model", tokenizer, save_method="lora")
-
-    # Save model with different quantization methods
-    quantization_methods = ["f16", "q4_k_m", "q5_k_m", "q8_0"]
-
-    for quant_method in quantization_methods:
-        model.save_pretrained_gguf(f"{OUTPUT_DIR}/model_{quant_method}", tokenizer, quantization_method=quant_method)
-
-    # Upload the model to Hugging Face with the best quantization method (e.g., q4_k_m)
-    if HF_TOKEN:
-        model.push_to_hub_gguf(
-            HF_MODEL_NAME,
-            tokenizer,
-            quantization_method="q4_k_m",
-            token=HF_TOKEN
-        )
-
-if __name__ == "__main__":
-    main()

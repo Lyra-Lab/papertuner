@@ -1,268 +1,211 @@
-from unsloth import FastLanguageModel, is_bfloat16_supported
-import torch
-import os
+"""Unsloth-based GRPO Training Pipeline for QA Model"""
+
+# Standard Library Imports
 import re
-from datasets import load_dataset, Dataset
+from typing import List, Optional
+
+# Third-party Imports
+import torch
+from datasets import Dataset, load_dataset
+from sentence_transformers import SentenceTransformer, util
 from trl import GRPOConfig, GRPOTrainer
+from unsloth import FastLanguageModel, is_bfloat16_supported
 from vllm import SamplingParams
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
-import random
 
-max_seq_length = 1024  # Can increase for longer reasoning traces
-lora_rank = 64  # Larger rank = smarter, but slower
+# Constants
+MODEL_NAME = "unsloth/DeepSeek-R1-Distill-Qwen-1.5B-unsloth-bnb-4bit"
+MAX_SEQ_LENGTH = 8192
+LORA_RANK = 64
+SYSTEM_PROMPT = """Respond in the following format:
+<reasoning>...</reasoning>
+<answer>...</answer>"""
 
-MODEL_NAME = "deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B"
-DATASET_REPO = "densud2/ml_qa_dataset"
-OUTPUT_DIR = "output/rl_finetuned"
-HF_MODEL_NAME = "username/grpo_finetuned_model"  # Replace 'username' with your Hugging Face username
-HF_TOKEN = os.environ.get("HF_TOKEN")  # Your Hugging Face token, get it from https://huggingface.co/settings/tokens
+class ModelManager:
+    """Handles model loading and configuration"""
 
-# Load the sentence transformer model for embeddings and similarity calculation
-model_embedding = SentenceTransformer('all-mpnet-base-v2')
+    @staticmethod
+    def load_model_and_tokenizer():
+        """Initialize model and tokenizer with optimal settings"""
+        device = "cuda" if torch.cuda.is_available() else "cpu"
 
-model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name=MODEL_NAME,
-    max_seq_length=max_seq_length,
-    load_in_4bit=True,  # False for LoRA 16bit
-    fast_inference=True,  # Enable vLLM fast inference
-    max_lora_rank=lora_rank,
-    gpu_memory_utilization=0.5,  # Reduce if out of memory
-)
-
-model = FastLanguageModel.get_peft_model(
-    model,
-    r=lora_rank,  # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
-    target_modules=[
-        "q_proj", "k_proj", "v_proj", "o_proj",
-        "gate_proj", "up_proj", "down_proj",
-    ],  # Remove QKVO if out of memory
-    lora_alpha=lora_rank,
-    use_gradient_checkpointing="unsloth",  # Enable long context finetuning
-    random_state=3407,
-)
-
-# System prompt and format definitions
-SYSTEM_PROMPT = """
-Respond in the following format:
-<think>
-Write your reasoning step-by-step here. This section should contain your thought process.
-</think>
-<answer>
-Write your final answer here.
-</answer>
-"""
-
-XML_COT_FORMAT = """\
-<think>
-{reasoning}
-</think>
-<answer>
-{answer}
-</answer>
-"""
-
-def extract_xml_answer(text: str) -> str:
-    """Extract the answer from XML tags in the text."""
-    answer = text.split("<answer>")[-1]
-    answer = answer.split("</answer>")[0]
-    return answer.strip()
-
-def verify_output_format(text: str) -> bool:
-    """Verify if the output follows the expected format with think and answer tags."""
-    pattern = r"<think>.*?</think>\s*<answer>.*?</answer>"
-    return bool(re.search(pattern, text, re.DOTALL))
-
-# Load ML QA dataset from Hugging Face
-def get_ml_qa_dataset(split="train"):
-    # Load the dataset from Hugging Face
-    data = load_dataset(DATASET_REPO, split=split)
-
-    # Format it for training
-    data = data.map(lambda x: {
-        'prompt': [
-            {'role': 'system', 'content': SYSTEM_PROMPT},
-            {'role': 'user', 'content': x['question']}
-        ],
-        'reference': x['answer']
-    })
-    return data
-
-# Replace the GSM8K dataset with ML QA dataset
-dataset = get_ml_qa_dataset()
-
-# Reward functions
-def semantic_similarity_reward_func(prompts=None, completions=None, **kwargs):
-    """
-    Reward function based on semantic similarity using sentence embeddings.
-    """
-    # Get references from the dataset
-    train_dataset = kwargs.get('train_dataset', None)
-    batch_indices = kwargs.get('batch_indices', None)
-
-    if train_dataset is None or batch_indices is None:
-        # Fallback for testing/debugging
-        return [0.0] * len(completions)
-
-    # Extract references from the dataset based on batch indices
-    references = [train_dataset[idx]['reference'] for idx in batch_indices]
-
-    rewards = []
-    for completion, reference in zip(completions, references):
-        if not completion or not reference:
-            rewards.append(0.0)
-            continue
-
-        response = completion[0]["content"] if isinstance(completion[0], dict) else completion[0]
-
-        if not verify_output_format(response):
-            rewards.append(0.0)  # Penalize if the output format is incorrect
-            continue
-
-        # Encode the response and reference
-        try:
-            embeddings = model_embedding.encode([response, reference])
-            reward = cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
-        except Exception as e:
-            print(f"Error during embedding calculation: {e}")
-            reward = 0.0
-
-        rewards.append(reward)
-
-    return rewards
-
-def think_format_reward_func(completions, **kwargs) -> list[float]:
-    """Reward function that checks if the completion has think tags."""
-    pattern = r"<think>.*?</think>"
-    responses = [completion[0]["content"] for completion in completions]
-    matches = [bool(re.search(pattern, r, re.DOTALL)) for r in responses]
-    return [0.5 if match else 0.0 for match in matches]
-
-# Debugging function
-def debug_reward_functions(model, tokenizer, dataset, num_samples=3):
-    """
-    Debug reward functions by generating completions and calculating rewards.
-    """
-    print("Debugging Reward Functions...")
-    # Ensure the model's LoRA is loaded
-    if not model.peft_config:
-        print("Warning: LoRA not loaded. Loading LoRA now...")
-        model.load_lora("grpo_saved_lora")
-
-    # Sample data from the dataset
-    sample_indices = random.sample(range(len(dataset)), num_samples)
-    sample_data = dataset.select(sample_indices)
-    prompts = [sample_data[i]['prompt'] for i in range(num_samples)]
-    references = [sample_data[i]['reference'] for i in range(num_samples)]
-
-    # Generate responses using the model
-    sampling_params = SamplingParams(
-        temperature=0.8,
-        top_p=0.95,
-        max_tokens=200,  # Reduced for debugging
-    )
-    try:
-        outputs = model.fast_generate(
-            [tokenizer.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True) for prompt in prompts],
-            sampling_params=sampling_params,
-            lora_request=model.load_lora("grpo_saved_lora"), # Ensure LoRA is loaded
+        model, tokenizer = FastLanguageModel.from_pretrained(
+            model_name=MODEL_NAME,
+            max_seq_length=MAX_SEQ_LENGTH,
+            load_in_4bit=True,
+            fast_inference=True,
+            max_lora_rank=LORA_RANK,
+            gpu_memory_utilization=0.5,
         )
-    except Exception as e:
-        print(f"Error during generation: {e}")
-        return
 
-    # Extract responses
-    completions = [[{"role": "assistant", "content": output.outputs[0].text}] for output in outputs]
+        model = FastLanguageModel.get_peft_model(
+            model,
+            r=LORA_RANK,
+            target_modules=[
+                "q_proj", "k_proj", "v_proj", "o_proj",
+                "gate_proj", "up_proj", "down_proj",
+            ],
+            lora_alpha=LORA_RANK,
+            use_gradient_checkpointing="unsloth",
+            random_state=3407,
+        )
+        return model, tokenizer
 
-    # Print samples
-    for i, (completion, reference) in enumerate(zip(completions, references)):
-        print(f"Sample {i+1}:")
-        print(f"  Prompt: {prompts[i]}")
-        print(f"  Completion: {completion[0]['content']}")
-        print(f"  Reference: {reference}")
+class DataHandler:
+    """Handles dataset loading and preprocessing"""
 
-    # Calculate rewards
-    sem_rewards = semantic_similarity_reward_func(None, completions, train_dataset=dataset, batch_indices=sample_indices)
-    think_rewards = think_format_reward_func(completions)
+    @staticmethod
+    def load_qa_dataset(split: str = "train") -> Dataset:
+        """Load and format the QA dataset"""
+        dataset = load_dataset("densud2/ml_qa_dataset", split=split)
 
-    # Print rewards
-    for i, (sem_reward, think_reward) in enumerate(zip(sem_rewards, think_rewards)):
-        print(f"Sample {i+1}: Semantic Reward {sem_reward:.4f}, Think Format Reward {think_reward:.4f}")
-    print("Debugging Complete.\n")
-# Set up GRPO Trainer configurations
-training_args = GRPOConfig(
-    use_vllm=True,  # Use vLLM for fast inference!
-    learning_rate=5e-6,
-    adam_beta1=0.9,
-    adam_beta2=0.99,
-    weight_decay=0.1,
-    warmup_ratio=0.1,
-    lr_scheduler_type="cosine",
-    optim="adamw_8bit",
-    logging_steps=1,
-    bf16=is_bfloat16_supported(),
-    fp16=not is_bfloat16_supported(),
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=1,  # Increase to 4 for smoother training
-    num_generations=8,  # Decrease if out of memory
-    max_prompt_length=256,
-    max_completion_length=200,
-    # num_train_epochs=1,  # Set to 1 for a full training run
-    max_steps=250,
-    save_steps=250,
-    max_grad_norm=0.1,
-    report_to="none",  # Can use Weights & Biases
-    output_dir=OUTPUT_DIR,
-)
+        def format_example(x):
+            return {
+                'prompt': [
+                    {'role': 'system', 'content': SYSTEM_PROMPT},
+                    {'role': 'user', 'content': x['question']}
+                ],
+                'answer': x['answer']
+            }
 
-# Initialize and run the trainer with our custom reward functions
-print("Initializing GRPOTrainer...")
-trainer = GRPOTrainer(
-    model=model,
-    processing_class=tokenizer,
-    reward_funcs=[
-        semantic_similarity_reward_func,
-        think_format_reward_func,
-    ],
-    args=training_args,
-    train_dataset=dataset,
-)
+        return dataset.map(format_example)
 
-# Debug before training
-debug_reward_functions(model, tokenizer, dataset, num_samples=3)
+class RewardCalculator:
+    """Contains all reward calculation functions"""
 
-print("Starting Training...")
-trainer.train()
-print("Training Complete.")
+    def __init__(self):
+        self.embedding_model = SentenceTransformer('paraphrase-MiniLM-L6-v2')
 
-# Save the LoRA weights
-model.save_lora("grpo_saved_lora")
+    @staticmethod
+    def extract_xml_content(text: str, tag: str) -> str:
+        """Generic XML tag content extractor"""
+        if f"<{tag}>" in text and f"</{tag}>" in text:
+            content = text.split(f"<{tag}>")[-1].split(f"</{tag}>")[0]
+            return content.strip()
+        return ""
 
-# Test the model with a sample question
-text = tokenizer.apply_chat_template([
-    {"role": "system", "content": SYSTEM_PROMPT},
-    {"role": "user", "content": "What are the advantages of using attention mechanisms in neural networks?"},
-], tokenize=False, add_generation_prompt=True)
+    def extract_answer(self, text: str) -> str:
+        """Extract answer from XML or fallback format"""
+        for tag in ["answer", "think"]:
+            content = self.extract_xml_content(text, tag)
+            if content:
+                return content
+        return text.strip()
 
-# Generate a response with the fine-tuned model
-sampling_params = SamplingParams(
-    temperature=0.8,
-    top_p=0.95,
-    max_tokens=1024,
-)
-output = model.fast_generate(
-    text,
-    sampling_params=sampling_params,
-    lora_request=model.load_lora("grpo_saved_lora"),
-)
+    def correctness_reward(self, prompts, completions, answers) -> List[float]:
+        """Calculate semantic similarity reward"""
+        responses = [c[0]['content'] for c in completions]
+        extracted = [self.extract_answer(r) for r in responses]
 
-print(output[0].outputs[0].text)
+        rewards = []
+        for resp, ans in zip(extracted, answers):
+            embeds = self.embedding_model.encode([resp, ans], convert_to_tensor=True)
+            sim = util.pytorch_cos_sim(embeds[0], embeds[1]).item()
+            rewards.append(sim * 2.0)
+        return rewards
 
-# Save to GGUF format if needed
-if HF_TOKEN:
-    model.push_to_hub_gguf(
-        HF_MODEL_NAME,
-        tokenizer,
-        quantization_method="q4_k_m",
-        token=HF_TOKEN,
-    )
+    @staticmethod
+    def format_reward(completions, pattern: str) -> List[float]:
+        """Generic format reward checker"""
+        return [
+            0.5 if re.search(pattern, c[0]["content"], re.DOTALL) else 0.0
+            for c in completions
+        ]
+
+class TrainingOrchestrator:
+    """Manages the training process"""
+
+    @staticmethod
+    def get_training_config() -> GRPOConfig:
+        """Return configured training parameters"""
+        return GRPOConfig(
+            use_vllm=True,
+            learning_rate=5e-6,
+            adam_beta1=0.9,
+            adam_beta2=0.99,
+            weight_decay=0.1,
+            warmup_ratio=0.1,
+            lr_scheduler_type="cosine",
+            optim="adamw_8bit",
+            logging_steps=1,
+            bf16=is_bfloat16_supported(),
+            fp16=not is_bfloat16_supported(),
+            per_device_train_batch_size=1,
+            gradient_accumulation_steps=1,
+            num_generations=8,
+            max_prompt_length=256,
+            max_completion_length=4096,
+            max_steps=250,
+            save_steps=250,
+            max_grad_norm=0.1,
+            report_to="wandb",
+            output_dir="outputs",
+        )
+
+    def execute_training(self, model, tokenizer, dataset):
+        """Run the full training workflow"""
+        reward_calculator = RewardCalculator()
+
+        trainer = GRPOTrainer(
+            model=model,
+            processing_class=tokenizer,
+            reward_funcs=[
+                reward_calculator.correctness_reward,
+                lambda c: self.format_reward(c, r"<reasoning>.*?</reasoning>\s*<answer>.*?</answer>"),
+                lambda c: self.format_reward(c, r"<think>.*?</think>.*"),
+            ],
+            args=self.get_training_config(),
+            train_dataset=dataset,
+        )
+        trainer.train()
+        return trainer
+
+class InferenceService:
+    """Handles model inference"""
+
+    def __init__(self, model, tokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+
+    def generate_response(self, prompt: str, lora_path: Optional[str] = None):
+        """Generate response with optional LoRA"""
+        text = self.tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            tokenize=False,
+            add_generation_prompt=True
+        )
+
+        sampling_params = SamplingParams(
+            temperature=0.8,
+            top_p=0.95,
+            max_tokens=1024,
+        )
+
+        return self.model.fast_generate(
+            [text],
+            sampling_params=sampling_params,
+            lora_request=self.model.load_lora(lora_path) if lora_path else None,
+        )[0].outputs[0].text
+
+# Main Execution Flow
+if __name__ == "__main__":
+    # Initialize components
+    model, tokenizer = ModelManager.load_model_and_tokenizer()
+    dataset = DataHandler.load_qa_dataset()
+
+    # Training
+    trainer = TrainingOrchestrator().execute_training(model, tokenizer, dataset)
+
+    # Inference Demo
+    inference_engine = InferenceService(model, tokenizer)
+
+    # Base model example
+    print("Base Model Response:")
+    print(inference_engine.generate_response("How many r's are in strawberry?"))
+
+    # Trained model example
+    model.save_lora("grpo_saved_lora")
+    print("\nTrained Model Response:")
+    print(inference_engine.generate_response(
+        "How many r's are in strawberry?",
+        lora_path="grpo_saved_lora"
+    ))

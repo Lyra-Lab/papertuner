@@ -11,8 +11,8 @@ from vllm import SamplingParams
 
 # Constants
 MODEL_NAME = "unsloth/DeepSeek-R1-Distill-Qwen-1.5B"
-MAX_SEQ_LENGTH = 8192 / 8
-LORA_RANK = 16
+MAX_SEQ_LENGTH = 8192 
+LORA_RANK = 64
 SYSTEM_PROMPT = "Respond in the format:\n<reasoning>...</reasoning>\n<answer>...</answer>"
 
 # --- Model Loading ---
@@ -23,7 +23,7 @@ def load_model():
         load_in_4bit=True,
         fast_inference=True,
         max_lora_rank=LORA_RANK,
-        gpu_memory_utilization=0.65,
+        gpu_memory_utilization=0.8,
     )
 
     return FastLanguageModel.get_peft_model(
@@ -102,8 +102,8 @@ def get_trainer(model, tokenizer, dataset):
             num_generations=8,
             max_prompt_length=256,
             max_completion_length=4096,
-            max_steps=250,
-            save_steps=250,
+            max_steps=500,
+            save_steps=500,
             max_grad_norm=0.1,
             report_to="wandb",
             output_dir="outputs",

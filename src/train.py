@@ -11,7 +11,7 @@ from vllm import SamplingParams
 
 # Constants
 MODEL_NAME = "unsloth/DeepSeek-R1-Distill-Qwen-1.5B"
-MAX_SEQ_LENGTH = 8192 / 2
+MAX_SEQ_LENGTH = 5120
 LORA_RANK = 64
 SYSTEM_PROMPT = "Respond in the format:\n<reasoning>...</reasoning>\n<answer>...</answer>"
 

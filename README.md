@@ -1,6 +1,7 @@
 # PaperTuner
 
 PaperTuner is a Python package for creating research assistant models by processing academic papers and fine-tuning language models to provide methodology guidance and research approaches.
+(quick start is available in [colab](https://colab.research.google.com/drive/1I96xJAveEYoW-xjS4WcAeSbxuB7I169q?usp=sharing) now)
 
 ## Features
 

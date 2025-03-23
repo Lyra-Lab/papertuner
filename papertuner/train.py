@@ -269,7 +269,7 @@ class ResearchAssistantTrainer:
 
         return response
 
-    def demo_comparison(self, model, tokenizer, lora_path):
+    def demo_comparison(self, model, tokenizer, lora_path, dataset_name):
         """
         Run a demo comparison of model outputs before and after training.
 
@@ -277,12 +277,11 @@ class ResearchAssistantTrainer:
             model: The model
             tokenizer: The tokenizer
             lora_path: Path to saved LoRA weights
+            dataset_name: The name of the dataset to load questions from
         """
-        test_questions = [
-            "How would you design a transformer model for time series forecasting?",
-            "What's the best approach to handle class imbalance in a medical image dataset?",
-            "How should I structure an ML system that needs both real-time and batch predictions?"
-        ]
+        # Load the dataset to extract test questions
+        dataset = datasets.load_dataset(dataset_name, split="train")
+        test_questions = [example['question'] for example in dataset.select(random.sample(range(len(dataset)), 3))]
 
         for i, question in enumerate(test_questions):
             logger.info(f"\n=== Test Question {i+1} ===")

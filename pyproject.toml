@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "papertuner"
-version = "0.0.3"
+version = "0.0.5"
 authors = [{ name = "Your Name", email = "your.email@example.com" }]
 description = "A package for creating ML research assistant models through paper dataset creation and model fine-tuning"
 readme = "README.md"
@@ -27,65 +27,11 @@ dependencies = [
     "requests==2.32.3",
     "datasets==3.4.1",
     "sentence-transformers==3.4.1",
-    "trl==0.15.2",
-    "vllm",
-    # Unsloth is conditionally handled below
+    "trl>=0.15.2",
+    "vllm>=0.8.1",
+    "torch>=2.6.0",
+    "unsloth[cu124-torch260]",
 ]
-
-[project.optional-dependencies]
-cu118-torch220 = ["unsloth[cu118-torch220]==2025.3.18"] # CUDA 11.8, Torch 2.2
-cu118-torch230 = ["unsloth[cu118-torch230]==2025.3.18"] # CUDA 11.8, Torch 2.3
-cu118-torch240 = ["unsloth[cu118-torch240]==2025.3.18"] # CUDA 11.8, Torch 2.4
-cu118-torch250 = ["unsloth[cu118-torch250]==2025.3.18"] # CUDA 11.8, Torch 2.5
-
-cu121-torch220 = ["unsloth[cu121-torch220]==2025.3.18"] # CUDA 12.1, Torch 2.2
-cu121-torch230 = ["unsloth[cu121-torch230]==2025.3.18"] # CUDA 12.1, Torch 2.3
-cu121-torch240 = ["unsloth[cu121-torch240]==2025.3.18"] # CUDA 12.1, Torch 2.4
-cu121-torch250 = ["unsloth[cu121-torch250]==2025.3.18"] # CUDA 12.1, Torch 2.5
-
-cu124-torch220 = ["unsloth[cu124-torch220]==2025.3.18"] # CUDA 12.4, Torch 2.2
-cu124-torch230 = ["unsloth[cu124-torch230]==2025.3.18"] # CUDA 12.4, Torch 2.3
-cu124-torch240 = ["unsloth[cu124-torch240]==2025.3.18"] # CUDA 12.4, Torch 2.4
-cu124-torch250 = ["unsloth[cu124-torch250]==2025.3.18"] # CUDA 12.4, Torch 2.5
-
-cu118-ampere-torch220 = [
-    "unsloth[cu118-ampere-torch220]==2025.3.18",
-] # CUDA 11.8 Ampere, Torch 2.2
-cu118-ampere-torch230 = [
-    "unsloth[cu118-ampere-torch230]==2025.3.18",
-] # CUDA 11.8 Ampere, Torch 2.3
-cu118-ampere-torch240 = [
-    "unsloth[cu118-ampere-torch240]==2025.3.18",
-] # CUDA 11.8 Ampere, Torch 2.4
-cu118-ampere-torch250 = [
-    "unsloth[cu118-ampere-torch250]==2025.3.18",
-] # CUDA 11.8 Ampere, Torch 2.5
-
-cu121-ampere-torch220 = [
-    "unsloth[cu121-ampere-torch220]==2025.3.18",
-] # CUDA 12.1 Ampere, Torch 2.2
-cu121-ampere-torch230 = [
-    "unsloth[cu121-ampere-torch230]==2025.3.18",
-] # CUDA 12.1 Ampere, Torch 2.3
-cu121-ampere-torch240 = [
-    "unsloth[cu121-ampere-torch240]==2025.3.18",
-] # CUDA 12.1 Ampere, Torch 2.4
-cu121-ampere-torch250 = [
-    "unsloth[cu121-ampere-torch250]==2025.3.18",
-] # CUDA 12.1 Ampere, Torch 2.5
-
-cu124-ampere-torch220 = [
-    "unsloth[cu124-ampere-torch220]==2025.3.18",
-] # CUDA 12.4 Ampere, Torch 2.2
-cu124-ampere-torch230 = [
-    "unsloth[cu124-ampere-torch230]==2025.3.18",
-] # CUDA 12.4 Ampere, Torch 2.3
-cu124-ampere-torch240 = [
-    "unsloth[cu124-ampere-torch240]==2025.3.18",
-] # CUDA 12.4 Ampere, Torch 2.4
-cu124-ampere-torch250 = [
-    "unsloth[cu124-ampere-torch250]==2025.3.18",
-] # CUDA 12.4 Ampere, Torch 2.5
 
 [project.urls]
 "Homepage" = "https://github.com/yourusername/papertuner"

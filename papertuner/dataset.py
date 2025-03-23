@@ -894,7 +894,7 @@ A2: [Detailed answer to second question]
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Create a dataset of QA pairs from research papers")
-    
+
     parser.add_argument("--max-papers", type=int, default=100,
                         help="Maximum number of papers to process")
     parser.add_argument("--force", action="store_true",
@@ -907,30 +907,30 @@ def parse_args():
                         help="Hugging Face repository ID for upload")
     parser.add_argument("--validate", action="store_true",
                         help="Validate the dataset and print statistics")
-    
+
     return parser.parse_args()
 
 
 def main():
     """Main entry point for the dataset creation script."""
     args = parse_args()
-    
+
     print("=" * 50)
     print(f"PaperTuner: Research Paper Dataset Creator")
     print("=" * 50)
-    
+
     # Initialize processor with configuration
     processor = ResearchPaperProcessor(
         hf_repo_id=args.hf_repo_id or HF_REPO_ID
     )
-    
+
     # Process papers
     new_papers = processor.process_papers(
         max_papers=args.max_papers,
         search_query=args.query,
         force_reprocess=args.force
     )
-    
+
     if args.validate or args.upload:
         # Validate dataset
         validation = processor.validate_dataset()
@@ -938,7 +938,7 @@ def main():
         print(f"- Total entries: {validation['total_files']}")
         print(f"- Valid QA pairs: {validation['valid_entries']}")
         print(f"- Issues found: {len(validation['validation_issues'])}")
-        
+
         # Print dataset statistics
         stats = processor.generate_statistics()
         if stats:
@@ -950,7 +950,7 @@ def main():
             print("- Domain Breakdown:")
             for domain, count in sorted(stats["domain_breakdown"].items(), key=lambda x: x[1], reverse=True):
                 print(f"  - {domain}: {count}")
-    
+
     # Upload to Hugging Face if requested
     if args.upload:
         success = processor.upload_to_hf()
@@ -958,7 +958,7 @@ def main():
             print("\nDataset successfully uploaded to Hugging Face Hub!")
         else:
             print("\nFailed to upload dataset to Hugging Face Hub.")
-    
+
     print("\n" + "=" * 50)
     if new_papers:
         print(f"Processing completed! Added {len(new_papers)} new papers to the dataset.")

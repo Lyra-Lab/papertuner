@@ -2,6 +2,7 @@
 
 import os
 import argparse
+import unsloth
 import torch
 from pathlib import Path
 import datasets

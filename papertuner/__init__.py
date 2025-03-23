@@ -6,14 +6,19 @@ This package contains functionality for:
 2. Fine-tuning language models for research assistance
 """
 
-__version__ = "0.0.8"
+__version__ = "0.1.0"
 
 # Import key classes so users can import directly from papertuner
-from papertuner.dataset import ResearchPaperProcessor
+from papertuner.dataset import ResearchPaperProcessor, DatasetManager
 from papertuner.train import ResearchAssistantTrainer
+from papertuner.config import Config
+from papertuner.utils import LLMClient
 
 # Export key functions and classes
 __all__ = [
     "ResearchPaperProcessor",
-    "ResearchAssistantTrainer"
+    "ResearchAssistantTrainer",
+    "DatasetManager",
+    "Config",
+    "LLMClient",
 ]

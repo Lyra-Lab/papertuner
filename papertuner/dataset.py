@@ -37,7 +37,8 @@ class ResearchPaperProcessor:
         api_key=GEMINI_API_KEY,
         api_base_url=API_BASE_URL,
         hf_token=HF_TOKEN,
-        hf_repo_id=HF_REPO_ID
+        hf_repo_id=HF_REPO_ID,
+        domain_config=None
     ):
         """
         Initialize the paper processor.
@@ -49,6 +50,7 @@ class ResearchPaperProcessor:
             api_base_url: Base URL for API calls
             hf_token: Hugging Face API token
             hf_repo_id: Hugging Face repository ID
+            domain_config: Domain-specific configuration
         """
         self.raw_dir = Path(raw_dir)
         self.processed_dir = Path(processed_dir)
@@ -56,6 +58,7 @@ class ResearchPaperProcessor:
         self.api_base_url = api_base_url
         self.hf_token = hf_token
         self.hf_repo_id = hf_repo_id
+        self.domain_config = domain_config or self._load_default_domain_config()
 
         # Initialize LLM client
         self.client = OpenAI(
@@ -67,6 +70,14 @@ class ResearchPaperProcessor:
         setup_dirs()
 
         logger.info("ResearchPaperProcessor initialized")
+
+    def _load_default_domain_config(self):
+        return {
+            "sections_of_interest": ["introduction", "methodology", "results", "discussion"],
+            "domain_keywords": [],
+            "qa_templates": [],
+            "citation_importance": 0.5,  # How much to weight citations in relevance
+        }
 
     def has_been_processed(self, paper_id):
         """
@@ -159,99 +170,15 @@ class ResearchPaperProcessor:
             return ""
 
     def extract_sections(self, text):
-        """
-        Extract key sections from research paper text.
-
-        Args:
-            text: Full text of the paper
-
-        Returns:
-            dict: Extracted sections (problem, methodology, results)
-        """
-        try:
-            # Problem/Introduction patterns
-            problem_patterns = [
-                r"(?:INTRODUCTION|BACKGROUND|PROBLEM STATEMENT|MOTIVATION|OVERVIEW).*?(?=\n\n[A-Z][A-Z\s]+\n)",
-                r"(?:1[\.\s]+INTRODUCTION|1[\.\s]+BACKGROUND|I[\.\s]+INTRODUCTION).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
-                r"(?:\n\nIntroduction\n|\n\nBackground\n|\n\nMotivation\n).*?(?=\n\n[A-Z][a-z])"
-            ]
-
-            # Methodology patterns
-            method_patterns = [
-                r"(?:METHODOLOGY|METHOD|APPROACH|EXPERIMENTAL DESIGN|PROPOSED METHOD|MODEL ARCHITECTURE|SYSTEM DESIGN|NETWORK ARCHITECTURE|IMPLEMENTATION|PROPOSED APPROACH).*?(?=\n\n[A-Z][A-Z\s]+\n)",
-                r"(?:[2-4][\.\s]+(?:METHODOLOGY|METHOD|APPROACH|PROPOSED|MODEL|ARCHITECTURE)).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
-                r"(?:\n\nMethodology\n|\n\nMethod\n|\n\nApproach\n|\n\nProposed method\n|\n\nArchitecture\n|\n\nModel\n|\n\nImplementation\n).*?(?=\n\n[A-Z][a-z])"
-            ]
-
-            # Results patterns
-            result_patterns = [
-                r"(?:RESULTS|EVALUATION|FINDINGS|EXPERIMENTS|EXPERIMENTAL RESULTS|PERFORMANCE|EVALUATION RESULTS).*?(?=\n\n[A-Z][A-Z\s]+\n)",
-                r"(?:[3-6][\.\s]+(?:RESULTS|EVALUATION|EXPERIMENTS|PERFORMANCE)).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
-                r"(?:\n\nResults\n|\n\nEvaluation\n|\n\nExperiments\n|\n\nPerformance\n|\n\nExperimental results\n).*?(?=\n\n[A-Z][a-z])"
-            ]
-
-            # Try all patterns for each section type
-            problem_text = ""
-            for pattern in problem_patterns:
-                match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-                if match:
-                    problem_text = match.group(0)
-                    break
-
-            method_text = ""
-            for pattern in method_patterns:
-                match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-                if match:
-                    method_text = match.group(0)
-                    break
-
-            result_text = ""
-            for pattern in result_patterns:
-                match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-                if match:
-                    result_text = match.group(0)
-                    break
-
-            # If we still don't have the methodology section, try a fallback approach
-            if not method_text:
-                # Look for sections that might contain methodology information
-                method_related_keywords = [
-                    "architecture", "network", "model", "algorithm", "framework",
-                    "implementation", "system", "approach", "design", "experiment"
-                ]
-
-                # Search for paragraphs with methodology-related content
-                paragraphs = re.split(r'\n\n+', text)
-                method_paragraphs = []
-
-                for paragraph in paragraphs:
-                    # Check if paragraph is likely about methodology
-                    if any(keyword in paragraph.lower() for keyword in method_related_keywords):
-                        if len(paragraph) > 100:  # Only include substantial paragraphs
-                            method_paragraphs.append(paragraph)
-
-                if method_paragraphs:
-                    method_text = "\n\n".join(method_paragraphs[:3])  # Limit to first few relevant paragraphs
-
-            # If we identified any sections, return them
-            sections = {
-                "problem": problem_text.strip(),
-                "methodology": method_text.strip(),
-                "results": result_text.strip()
-            }
-
-            # Log which sections were found
-            found_sections = [k for k, v in sections.items() if v]
-            if found_sections:
-                logger.info(f"Extracted sections: {', '.join(found_sections)}")
-            else:
-                logger.warning("No sections extracted from paper")
-
-            return sections
-
-        except Exception as e:
-            logger.error(f"Error extracting core sections: {e}")
-            return {}
+        """Enhanced section extraction based on domain configuration"""
+        # Customize extraction based on domain-specific patterns
+        if self.domain_config.get("is_medical", False):
+            # Apply medical paper structure parsing
+            # ...
+        elif self.domain_config.get("is_computer_science", False):
+            # Apply CS paper structure parsing
+            # ...
+        # ... default extraction logic ...
 
     def generate_qa(self, paper_data, sections, num_pairs=3):
         """
@@ -873,6 +800,230 @@ Each answer should:
         except Exception as e:
             logger.error(f"Failed to upload dataset to Hugging Face Hub: {e}")
             return False  # Indicate upload failure
+
+class DatasetManager:
+    """Provides utilities for managing and analyzing datasets."""
+    
+    def __init__(self, cache_dir=None):
+        """
+        Initialize the dataset manager.
+        
+        Args:
+            cache_dir: Optional directory to cache datasets
+        """
+        self.cache_dir = cache_dir
+        
+        # Initialize metrics
+        try:
+            import evaluate
+            self.metrics = {
+                "rouge": evaluate.load("rouge"),
+                "bertscore": evaluate.load("bertscore")
+            }
+            self._has_metrics = True
+        except ImportError:
+            logger.warning("Evaluate package not installed, metrics unavailable")
+            self._has_metrics = False
+    
+    def load_dataset(self, dataset_path, split="train"):
+        """
+        Load a dataset from Hugging Face or local path.
+        
+        Args:
+            dataset_path: Path to dataset or Hugging Face dataset ID
+            split: Dataset split to load
+            
+        Returns:
+            datasets.Dataset: Loaded dataset
+        """
+        try:
+            import datasets
+            
+            # Try loading as a Hugging Face dataset
+            try:
+                dataset = datasets.load_dataset(dataset_path, split=split, cache_dir=self.cache_dir)
+                logger.info(f"Loaded dataset from Hugging Face: {dataset_path} ({split}) with {len(dataset)} examples")
+                return dataset
+            except:
+                # Try loading as a local path
+                if os.path.exists(dataset_path):
+                    if os.path.isdir(dataset_path):
+                        dataset = datasets.load_from_disk(dataset_path)
+                        if split in dataset:
+                            dataset = dataset[split]
+                        logger.info(f"Loaded dataset from disk: {dataset_path} with {len(dataset)} examples")
+                        return dataset
+                    elif dataset_path.endswith('.json') or dataset_path.endswith('.jsonl'):
+                        dataset = datasets.load_dataset('json', data_files=dataset_path, split=split)
+                        logger.info(f"Loaded dataset from JSON: {dataset_path} with {len(dataset)} examples")
+                        return dataset
+            
+            logger.error(f"Failed to load dataset: {dataset_path}")
+            return None
+            
+        except ImportError:
+            logger.error("Datasets package not installed")
+            return None
+    
+    def analyze_dataset(self, dataset_path, split="train"):
+        """
+        Analyze a dataset and return statistics.
+        
+        Args:
+            dataset_path: Path to dataset or Hugging Face dataset ID
+            split: Dataset split to analyze
+            
+        Returns:
+            dict: Dataset statistics
+        """
+        dataset = self.load_dataset(dataset_path, split)
+        if dataset is None:
+            return {"error": "Failed to load dataset"}
+        
+        stats = {
+            "dataset_path": dataset_path,
+            "split": split,
+            "num_examples": len(dataset),
+        }
+        
+        # Analyze question types
+        if "question" in dataset.column_names:
+            question_lengths = [len(q) for q in dataset["question"]]
+            stats["avg_question_length"] = sum(question_lengths) / len(question_lengths)
+            stats["min_question_length"] = min(question_lengths)
+            stats["max_question_length"] = max(question_lengths)
+            
+            # Check for question categories
+            if "category" in dataset.column_names:
+                categories = {}
+                for cat in dataset["category"]:
+                    categories[cat] = categories.get(cat, 0) + 1
+                stats["categories"] = categories
+        
+        # Analyze answers
+        if "answer" in dataset.column_names:
+            answer_lengths = [len(a) for a in dataset["answer"]]
+            stats["avg_answer_length"] = sum(answer_lengths) / len(answer_lengths)
+            stats["min_answer_length"] = min(answer_lengths)
+            stats["max_answer_length"] = max(answer_lengths)
+        
+        # Include a sample QA pair
+        if len(dataset) > 0 and "question" in dataset.column_names and "answer" in dataset.column_names:
+            sample_idx = 0
+            stats["sample_qa_pair"] = {
+                "question": dataset[sample_idx]["question"],
+                "answer": dataset[sample_idx]["answer"],
+            }
+            if "category" in dataset.column_names:
+                stats["sample_qa_pair"]["category"] = dataset[sample_idx]["category"]
+        
+        # Analyze paper sources if available
+        if "paper_id" in dataset.column_names:
+            unique_papers = set(dataset["paper_id"])
+            stats["unique_papers"] = len(unique_papers)
+            stats["avg_qa_pairs_per_paper"] = len(dataset) / len(unique_papers)
+        
+        return stats
+    
+    def merge_datasets(self, dataset_paths, output_path=None, split="train"):
+        """
+        Merge multiple datasets into one.
+        
+        Args:
+            dataset_paths: List of paths or Hugging Face dataset IDs
+            output_path: Path to save merged dataset (optional)
+            split: Dataset split to merge
+            
+        Returns:
+            datasets.Dataset: Merged dataset
+        """
+        import datasets
+        
+        merged_dataset = None
+        
+        for path in dataset_paths:
+            dataset = self.load_dataset(path, split)
+            if dataset is None:
+                logger.warning(f"Skipping {path}: Failed to load")
+                continue
+            
+            if merged_dataset is None:
+                merged_dataset = dataset
+            else:
+                merged_dataset = datasets.concatenate_datasets([merged_dataset, dataset])
+        
+        if merged_dataset is None:
+            logger.error("No datasets could be loaded")
+            return None
+        
+        logger.info(f"Merged dataset contains {len(merged_dataset)} examples")
+        
+        # Save if output path is provided
+        if output_path:
+            if output_path.endswith('.json'):
+                merged_dataset.to_json(output_path)
+            else:
+                merged_dataset.save_to_disk(output_path)
+            logger.info(f"Saved merged dataset to {output_path}")
+        
+        return merged_dataset
+    
+    def filter_dataset(self, dataset_path, output_path=None, split="train", **filters):
+        """
+        Filter a dataset based on criteria.
+        
+        Args:
+            dataset_path: Path to dataset or Hugging Face dataset ID
+            output_path: Path to save filtered dataset (optional)
+            split: Dataset split to filter
+            **filters: Filter criteria (e.g. category="Architecture & Design")
+            
+        Returns:
+            datasets.Dataset: Filtered dataset
+        """
+        dataset = self.load_dataset(dataset_path, split)
+        if dataset is None:
+            return None
+        
+        # Apply filters
+        filtered = dataset
+        for key, value in filters.items():
+            if key in dataset.column_names:
+                filtered = filtered.filter(lambda x: x[key] == value)
+        
+        logger.info(f"Filtered dataset contains {len(filtered)} examples (from {len(dataset)})")
+        
+        # Save if output path is provided
+        if output_path:
+            if output_path.endswith('.json'):
+                filtered.to_json(output_path)
+            else:
+                filtered.save_to_disk(output_path)
+            logger.info(f"Saved filtered dataset to {output_path}")
+        
+        return filtered
+    
+    def push_to_hf(self, dataset, repo_id, token=None, private=False):
+        """
+        Push a dataset to Hugging Face Hub.
+        
+        Args:
+            dataset: Dataset to push
+            repo_id: Hugging Face repository ID
+            token: HF API token (defaults to env var)
+            private: Whether the repository should be private
+            
+        Returns:
+            str: URL to the dataset on the hub
+        """
+        token = token or os.environ.get("HF_TOKEN")
+        if not token:
+            raise ValueError("No Hugging Face token provided. Set the HF_TOKEN environment variable or pass token")
+        
+        # Push to Hub
+        dataset.push_to_hub(repo_id, token=token, private=private)
+        
+        return f"https://huggingface.co/datasets/{repo_id}"
 
 def parse_args():
     """Parse command line arguments."""

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "papertuner"
-version = "0.0.8"
+version = "0.1.0"
 authors = [{ name = "Your Name", email = "your.email@example.com" }]
 description = "A package for creating ML research assistant models through paper dataset creation and model fine-tuning"
 readme = "README.md"
@@ -18,19 +18,40 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-  "huggingface_hub==0.29.3",
-  "tenacity==9.0.0",
+  "huggingface_hub>=0.20.0",
+  "tenacity>=9.0.0",
   "PyMuPDF>=1.22.0",
   "arxiv>=1.4.0",
-  "openai==1.66.3",
-  "tqdm==4.67.1",
-  "requests==2.32.3",
-  "datasets==3.4.1",
-  "sentence-transformers==3.4.1",
-  "trl>=0.15.2",
-  "vllm>=0.8.1",
-  "torch>=2.6.0",
-  "unsloth[cu124-torch260]",
+  "openai>=1.10.0",
+  "anthropic>=0.15.0",
+  "tqdm>=4.65.0",
+  "requests>=2.30.0",
+  "datasets>=3.0.0",
+  "sentence-transformers>=3.0.0",
+  "trl>=0.7.4",
+  "vllm>=0.3.0",
+  "torch>=2.2.0",
+  "unsloth[cu124-torch260]>=0.4.0",
+  "evaluate>=0.4.0",
+  "numpy>=1.24.0",
+  "pydantic>=2.0.0",
+  "typer>=0.9.0",
+  "rich>=13.0.0",
+  "gradio>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0.0",
+  "black>=23.0.0",
+  "isort>=5.12.0",
+  "mypy>=1.0.0",
+  "ruff>=0.0.270",
+]
+
+web = [
+  "streamlit>=1.28.0",
+  "streamlit-chat>=0.1.0",
 ]
 
 [project.urls]
@@ -41,6 +62,24 @@ dependencies = [
 [project.scripts]
 papertuner-dataset = "papertuner.dataset:main"
 papertuner-train = "papertuner.train:main"
+papertuner = "papertuner.cli:app"
 
 [tool.setuptools]
 packages = ["papertuner"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = ["E", "F", "B", "I"]
+
+[tool.pytest]
+testpaths = ["tests"]
+python_files = "test_*.py"

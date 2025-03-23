@@ -1,11 +1,12 @@
 """Dataset creation module for PaperTuner."""
-
 import os
 import json
 import time
 import datetime
 import re
 import argparse
+from enum import Enum
+from typing import List, Optional
 from pathlib import Path
 from collections import defaultdict
 import requests
@@ -16,6 +17,7 @@ from huggingface_hub import create_repo, login, HfApi
 import fitz  # PyMuPDF
 import arxiv
 from openai import OpenAI
+from pydantic import BaseModel, Field
 
 from papertuner.config import (
     logger, RAW_DIR, PROCESSED_DIR,
@@ -253,7 +255,7 @@ class ResearchPaperProcessor:
 
     def generate_qa(self, paper_data, sections, num_pairs=3):
         """
-        Generate multiple QA pairs from a paper.
+        Generate multiple QA pairs from a paper using structured output.
 
         Args:
             paper_data: Metadata about the paper
@@ -261,8 +263,29 @@ class ResearchPaperProcessor:
             num_pairs: Number of QA pairs to generate
 
         Returns:
-            list: Generated QA pairs
+            list: Generated QA pairs or None if generation fails
         """
+        # Define Pydantic models for structured output
+        class QuestionCategory(str, Enum):
+            ARCHITECTURE = "Architecture & Design"
+            IMPLEMENTATION = "Implementation Strategy & Techniques"
+            METHODOLOGY = "Methodology & Approach"
+            CHALLENGES = "Handling Specific Challenges"
+            ADAPTATION = "Adaptation & Transfer"
+            THEORY = "Theoretical Foundations"
+            ANALYSIS = "Analysis & Interpretation"
+            COMPARISON = "Comparative Assessment"
+            ETHICS = "Ethical Considerations"
+            FUTURE = "Future Directions"
+
+        class QAPair(BaseModel):
+            question: str = Field(..., description="The technical research question")
+            answer: str = Field(..., description="Detailed answer to the question")
+            category: QuestionCategory = Field(..., description="The category this question belongs to")
+
+        class QAOutput(BaseModel):
+            qa_pairs: List[QAPair] = Field(..., description="List of question-answer pairs generated from the paper")
+
         abstract = paper_data.get("abstract", "")
         problem = sections.get("problem", "")
         methodology = sections.get("methodology", "")
@@ -286,36 +309,19 @@ Abstract: {abstract}
         if results:
             context += f"\nResults: {results[:300]}...\n"
 
-        # Define question categories to ensure diversity
-        question_categories = [
-            "Architecture & Model Design",
-            "Implementation Strategy & Techniques",
-            "Training Approach & Optimization",
-            "Handling Specific Challenges",
-            "Adaptation & Transfer"
-        ]
+        # Limit number of pairs to a reasonable maximum
+        num_requested_pairs = min(num_pairs, 5)
 
-        # Define examples for each category
-        category_examples = {
-            "Architecture & Model Design": "How would you design the architecture for a model that needs to handle [SPECIFIC_REQUIREMENT] for [PROBLEM_TYPE]?",
-            "Implementation Strategy & Techniques": "What's the most effective approach to implement [TECHNIQUE] when facing [CONSTRAINT]?",
-            "Training Approach & Optimization": "How should one approach training a model for [TASK] when dealing with [DATA_CHALLENGE]?",
-            "Handling Specific Challenges": "What strategies would you recommend to address [SPECIFIC_CHALLENGE] in [DOMAIN]?",
-            "Adaptation & Transfer": "How would you adapt this approach to work in [DIFFERENT_DOMAIN] or with [DIFFERENT_REQUIREMENTS]?"
-        }
-
-        prompt = f"""You are an expert ML research advisor helping fellow researchers design approaches to solve challenging problems.
-Based on this research paper, create {min(num_pairs, 5)} DISTINCT technical research questions and detailed answers.
+        prompt = f"""You are an expert research advisor helping fellow researchers understand approaches to solve challenging problems in their field.
+Based on this research paper, create {num_requested_pairs} DISTINCT technical research questions and detailed answers.
 
 {context}
 
-IMPORTANT: Generate {min(num_pairs, 5)} different question-answer pairs that focus on DIFFERENT aspects of the research approach. Each question should belong to a different category from this list:
-
-1. Architecture & Model Design: Questions about how to design model architectures for specific requirements
-2. Implementation Strategy & Techniques: Questions about implementing specific techniques effectively
-3. Training Approach & Optimization: Questions about training strategies, optimization, and hyperparameters
-4. Handling Specific Challenges: Questions addressing particular technical challenges in the domain
-5. Adaptation & Transfer: Questions about adapting approaches to different domains or requirements
+Your task is to:
+1. Create {num_requested_pairs} substantive question-answer pairs about the research methodology, approach, and techniques
+2. Make sure each question belongs to a different category when possible
+3. Focus on the technical aspects that would be valuable for other researchers to understand
+4. Ensure questions and answers are domain-appropriate based on the paper's field
 
 Each question should:
 - Be specific and technical (not general or vague)
@@ -329,97 +335,37 @@ Each answer should:
 - Address tradeoffs and alternatives
 - Include technical details and practical considerations
 - Be thorough (at least 150-250 words)
-
-FORMAT YOUR RESPONSE LIKE THIS:
-Q1: [First technical question]
-A1: [Detailed answer to first question]
-
-Q2: [Second technical question on a different aspect]
-A2: [Detailed answer to second question]
-
-...and so on for {min(num_pairs, 5)} pairs.
 """
 
         try:
-            response = api_call(self.client, prompt, max_tokens=4000)
+            # Use structured output parsing
+            response = self.client.beta.chat.completions.parse(
+                model="gemini-2.0-flash",  # Use the appropriate model
+                messages=[
+                    {"role": "system", "content": "You help researchers understand technical approaches in scientific papers."},
+                    {"role": "user", "content": prompt}
+                ],
+                tools=[openai.pydantic_function_tool(QAOutput)]
+            )
 
-            # Parse multiple QA pairs from the response
-            qa_pairs = []
+            qa_output = response.choices[0].message.tool_calls[0].function.parsed_arguments
 
-            # Split the response into chunks by question markers (Q1:, Q2:, etc.)
-            # First, find all instances of 'Q1:', 'Q2:', etc.
-            q_markers = [f"Q{i}:" for i in range(1, num_pairs+1)]
-
-            for i, q_marker in enumerate(q_markers):
-                q_start = response.find(q_marker)
-                if q_start == -1:
-                    continue  # This question marker not found
-
-                # Find the corresponding answer marker
-                a_marker = f"A{i+1}:"
-                a_start = response.find(a_marker, q_start)
-                if a_start == -1:
-                    continue  # Answer marker not found
-
-                # Find the end of this QA pair (start of next question or end of string)
-                next_q_marker = f"Q{i+2}:" if i+1 < len(q_markers) else None
-                q_end = response.find(next_q_marker, a_start) if next_q_marker else len(response)
-
-                # Extract question and answer text
-                question_text = response[q_start+len(q_marker):a_start].strip()
-                answer_text = response[a_start+len(a_marker):q_end].strip()
-
-                # Add to our QA pairs if they're non-empty
-                if question_text and answer_text:
-                    qa_pairs.append({
-                        "question": question_text,
-                        "answer": answer_text,
-                        "category": question_categories[min(i, len(question_categories)-1)]
-                    })
-
-            # If no QA pairs were extracted, attempt a different parsing approach
-            if not qa_pairs:
-                # Try splitting by double newlines which often separate QA pairs
-                sections = response.split("\n\n")
-                current_q = None
-                current_a = None
-
-                for section in sections:
-                    if section.startswith("Q") and ":" in section:
-                        # If we already have a Q and A, save them
-                        if current_q and current_a:
-                            qa_pairs.append({
-                                "question": current_q,
-                                "answer": current_a,
-                                "category": "General"  # Can't determine category in this fallback
-                            })
-
-                        # Start a new question
-                        current_q = section.split(":", 1)[1].strip()
-                        current_a = None
-                    elif section.startswith("A") and ":" in section and current_q:
-                        current_a = section.split(":", 1)[1].strip()
-
-                # Don't forget the last pair
-                if current_q and current_a:
-                    qa_pairs.append({
-                        "question": current_q,
-                        "answer": current_a,
-                        "category": "General"
-                    })
-
-            # Validate each QA pair and only keep the good ones
+            # Validate each QA pair
             validated_pairs = []
-            for pair in qa_pairs:
-                if validate_qa_pair(pair):
-                    validated_pairs.append(pair)
+            for pair in qa_output.qa_pairs:
+                pair_dict = {
+                    "question": pair.question,
+                    "answer": pair.answer,
+                    "category": pair.category
+                }
+                if validate_qa_pair(pair_dict):
+                    validated_pairs.append(pair_dict)
 
             return validated_pairs if validated_pairs else None
 
         except Exception as e:
             logger.error(f"QA generation failed: {e}")
             return None
-
     def process_paper(self, paper):
         """
         Process a single paper.
@@ -869,7 +815,7 @@ A2: [Detailed answer to second question]
 
             dataset.push_to_hub(
                 self.hf_repo_id,
-                commit_message=f"Add dataset v1.0 with {len(dataset)} entries"
+                commit_message=f"Add dataset with {len(dataset)} entries"
             )
 
             # Upload README separately

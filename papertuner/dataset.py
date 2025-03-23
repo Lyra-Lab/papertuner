@@ -366,6 +366,7 @@ Each answer should:
         except Exception as e:
             logger.error(f"QA generation failed: {e}")
             return None
+
     def process_paper(self, paper):
         """
         Process a single paper.
@@ -499,14 +500,43 @@ Each answer should:
         # Write back to the manifest file
         return save_json_file(updated_manifest, manifest_path)
 
-    def process_papers(self, max_papers=100, search_query=None, force_reprocess=False):
+    def clear_processed_data(self):
+        """
+        Clears all processed paper data and the manifest.
+        """
+        papers_dir = self.processed_dir / "papers"
+        manifest_path = self.processed_dir / "manifest.json"
+
+        if papers_dir.exists():
+            for filename in os.listdir(papers_dir):
+                if filename.startswith("paper_") and filename.endswith(".json"):
+                    file_path = papers_dir / filename
+                    try:
+                        os.remove(file_path)
+                        logger.info(f"Deleted processed paper data: {filename}")
+                    except OSError as e:
+                        logger.error(f"Error deleting {filename}: {e}")
+
+        if manifest_path.exists():
+            try:
+                os.remove(manifest_path)
+                logger.info("Deleted processed papers manifest.")
+            except OSError as e:
+                logger.error(f"Error deleting manifest: {e}")
+        else:
+            logger.info("No manifest file found to delete.")
+
+        logger.info("Processed data cleared.")
+
+
+    def process_papers(self, max_papers=100, search_query=None, clear_processed_data=False): # Renamed force_reprocess to clear_processed_data
         """
         Process multiple papers from arXiv.
 
         Args:
             max_papers: Maximum number of papers to process
             search_query: ArXiv search query
-            force_reprocess: Force reprocessing of papers
+            clear_processed_data: Clear existing data and start from scratch
 
         Returns:
             list: Processed paper manifest items
@@ -531,11 +561,16 @@ Each answer should:
                 "meta-learning"
             ])
 
-        # Load already processed papers to avoid duplication
-        processed_ids = set()
-        if not force_reprocess:
+        # Clear processed data if requested BEFORE loading manifest
+        if clear_processed_data:
+            logger.info("Clearing existing processed paper data before processing.")
+            self.clear_processed_data()
+            processed_ids = set() # Treat as if no papers processed yet
+        else:
+            # Load already processed papers to avoid duplication
             processed_ids = set(self.load_processed_manifest())
             logger.info(f"Found {len(processed_ids)} already processed papers")
+
 
         # Configure ArXiv client and search
         client = arxiv.Client()
@@ -552,8 +587,8 @@ Each answer should:
 
         # Process papers one by one
         for result in tqdm(client.results(search), desc="Processing papers"):
-            # Skip if we've already processed this paper
-            if not force_reprocess and result.entry_id in processed_ids:
+            # Skip if we've already processed this paper (only if not clearing data)
+            if not clear_processed_data and result.entry_id in processed_ids: # Condition adjusted
                 logger.info(f"Skipping already processed paper: {result.entry_id}")
                 continue
 
@@ -597,9 +632,11 @@ Each answer should:
                 error_occurred = True
 
         # Only update the manifest if we have new items
-        if new_manifest_items:
+        if new_manifest_items and not clear_processed_data: # Do not save manifest if data was cleared and no new papers added in this run
             self.save_to_manifest(new_manifest_items)
             logger.info(f"Added {len(new_manifest_items)} papers to manifest")
+        elif clear_processed_data:
+            logger.info("Processed data cleared, manifest not updated (starting from scratch).")
         else:
             logger.info("No new papers were processed")
 
@@ -843,8 +880,6 @@ def parse_args():
 
     parser.add_argument("--max-papers", type=int, default=100,
                         help="Maximum number of papers to process")
-    parser.add_argument("--force", action="store_true",
-                        help="Force reprocessing of papers that have already been processed")
     parser.add_argument("--query", type=str, default=None,
                         help="ArXiv search query (default: ML-related topics)")
     parser.add_argument("--upload", action="store_true",
@@ -853,6 +888,8 @@ def parse_args():
                         help="Hugging Face repository ID for upload")
     parser.add_argument("--validate", action="store_true",
                         help="Validate the dataset and print statistics")
+    parser.add_argument("--clear-processed-data", action="store_true",
+                        help="Clear all processed papers and manifest to start from scratch.") #  --force argument REMOVED
 
     return parser.parse_args()
 
@@ -870,11 +907,21 @@ def main():
         hf_repo_id=args.hf_repo_id or HF_REPO_ID
     )
 
+    # Clear processed data if requested
+    if args.clear_processed_data: # CHECK FOR THE NEW ARGUMENT
+        print("Clearing all existing processed paper data...")
+        processor.clear_processed_data()
+        print("Processed data cleared.")
+        print("=" * 50)
+        print("Starting paper processing from scratch.")
+        print("=" * 50)
+
+
     # Process papers
     new_papers = processor.process_papers(
         max_papers=args.max_papers,
         search_query=args.query,
-        force_reprocess=args.force
+        clear_processed_data=args.clear_processed_data # Pass clear_processed_data argument
     )
 
     if args.validate or args.upload:

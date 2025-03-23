@@ -6,7 +6,7 @@ This package contains functionality for:
 2. Fine-tuning language models for research assistance
 """
 
-__version__ = "0.0.7"
+__version__ = "0.0.8"
 
 # Import key classes so users can import directly from papertuner
 from papertuner.dataset import ResearchPaperProcessor

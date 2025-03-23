@@ -296,7 +296,7 @@ class ResearchAssistantTrainer:
             post_response = self.run_inference(model, tokenizer, question, lora_path)
             logger.info(post_response)
 
-    def push_to_hub(self, model, tokenizer, repo_id, token=None):
+    def push_to_hf(self, model, tokenizer, repo_id, token=None):
         """
         Upload the model to Hugging Face Hub.
 
@@ -391,9 +391,9 @@ def main():
         )
 
     # Push to Hub if requested
-    if args.push_to_hub:
+    if args.push_to_hf:
         repo_id = args.hub_repo_id or f"{os.getenv('HF_USERNAME', 'user')}/ml-researcher"
-        trainer.push_to_hub(
+        trainer.push_to_hf(
             training_results["model"],
             training_results["tokenizer"],
             repo_id

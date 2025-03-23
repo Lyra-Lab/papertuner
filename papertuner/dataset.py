@@ -775,7 +775,7 @@ A2: [Detailed answer to second question]
 
         return stats
 
-    def upload_to_hf(self, split_ratios=(0.8, 0.1, 0.1)):
+    def push_to_hf(self, split_ratios=(0.8, 0.1, 0.1)):
         """
         Upload the dataset to Hugging Face Hub.
 
@@ -953,7 +953,7 @@ def main():
 
     # Upload to Hugging Face if requested
     if args.upload:
-        success = processor.upload_to_hf()
+        success = processor.push_to_hf()
         if success:
             print("\nDataset successfully uploaded to Hugging Face Hub!")
         else:

@@ -24,7 +24,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 RAW_DIR = Path("data/raw_dataset")
 PROCESSED_DIR = Path("data/processed_dataset")
 HF_TOKEN = os.getenv("HF_TOKEN")
-HF_REPO_ID = os.getenv("HF_REPO_ID")
+HF_REPO_ID = os.getenv("HF_REPO_ID") or "densud2/new-ml-papers-qa"
 
 # API configuration constants
 API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
@@ -807,7 +807,7 @@ if __name__ == "__main__":
         exit(1)  # Stop if directory setup fails
 
     # Process papers from arXiv, only adding new ones
-    new_papers = process_all_papers(max_papers=100)
+    new_papers = process_all_papers(max_papers=1000)
     if new_papers is None and not load_processed_manifest():  # Only exit if we have no papers at all
         logging.error("Initial paper processing failed and no existing papers. Script execution halted.")
         exit(1)

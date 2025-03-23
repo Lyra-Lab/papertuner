@@ -1,5 +1,5 @@
-"""Simplified GRPO Training Script for QA Model"""
-print("Welcome to the ML-QA Trainer!")
+"""Simplified GRPO Training Script for ML Research Assistant"""
+print("Welcome to the ML-Research Assistant Trainer!")
 # Imports
 import re
 import os
@@ -11,30 +11,42 @@ from unsloth import FastLanguageModel, is_bfloat16_supported
 from vllm import SamplingParams
 
 # Constants
-MODEL_NAME = "unsloth/DeepSeek-R1-Distill-Qwen-1.5B"
-MAX_SEQ_LENGTH = 8192
-LORA_RANK = 8
-SYSTEM_PROMPT = "Respond in the format:\n<reasoning>...</reasoning>\n<answer>...</answer>"
+MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
+MAX_SEQ_LENGTH = 1024
+LORA_RANK = 64
+SYSTEM_PROMPT = """You are an AI assistant specialized in machine learning concepts. Follow this response format:
+<think>
+First, think through the question step-by-step in this section.
+Consider what the user is asking, relevant concepts, and how to structure your answer.
+This section should contain your analytical process and reasoning.
+</think>
+
+After the think section, provide your direct answer without any tags.
+Your answer should be clear, concise, and directly address the question.
+"""
 
 # --- Model Loading ---
 def load_model():
     model, tokenizer = FastLanguageModel.from_pretrained(
-        model_name=MODEL_NAME,
-        max_seq_length=MAX_SEQ_LENGTH,
-        load_in_4bit=True,
-        fast_inference=True,
-        max_lora_rank=LORA_RANK,
-        gpu_memory_utilization=0.6,
+        model_name = MODEL_NAME,
+        max_seq_length = MAX_SEQ_LENGTH,
+        load_in_4bit = True, # False for LoRA 16bit
+        fast_inference = True, # Enable vLLM fast inference
+        max_lora_rank = LORA_RANK,
+        gpu_memory_utilization = 0.5, # Reduce if out of memory
     )
 
-    return FastLanguageModel.get_peft_model(
+    return model, tokenizer, FastLanguageModel.get_peft_model(
         model,
-        r=LORA_RANK,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        lora_alpha=LORA_RANK,
-        use_gradient_checkpointing="unsloth",
-        random_state=7,
-    ), tokenizer
+        r = LORA_RANK, # Choose any number > 0 ! Suggested 8, 16, 32, 64, 128
+        target_modules = [
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+        ], # Remove QKVO if out of memory
+        lora_alpha = LORA_RANK,
+        use_gradient_checkpointing = "unsloth", # Enable long context finetuning
+        random_state = 3407,
+    )
 
 # --- Data Preparation ---
 def load_dataset():
@@ -54,35 +66,36 @@ def load_dataset():
 # --- Reward Functions ---
 embedding_model = SentenceTransformer('paraphrase-MiniLM-L6-v2')
 
-def extract_content(text, tag):
-    if f"<{tag}>" in text and f"</{tag}>" in text:
-        return text.split(f"<{tag}>")[-1].split(f"</{tag}>")[0].strip()
-    return ""
+def extract_answer(text):
+    # Extract content after the <think> tag
+    return text.split("</think>")[-1].strip() if "</think>" in text else text
 
-def correctness_reward(prompts, completions, **kwargs):
-    """
-    Computes a reward based on the similarity between the generated answer
-    and the expected answer. The expected answers are passed via the keyword
-    'answer' (as produced by your dataset).
-    """
-    answers = kwargs.get("answer")
-    if answers is None:
-        raise ValueError("Missing 'answer' keyword argument in reward function.")
+def correctness_reward_func(prompts, completions, answer, **kwargs) -> list[float]:
+    responses = [completion[0]['content'] for completion in completions]
+    q = prompts[0][-1]['content']
+
+    # Extract answers from responses and ground truth
+    extracted_responses = [extract_answer(r) for r in responses]
+    extracted_answer = extract_answer(answer[0])
+
+    # Compute embeddings
+    response_embeddings = embedding_model.encode(extracted_responses, convert_to_tensor=True)
+    answer_embedding = embedding_model.encode([extracted_answer], convert_to_tensor=True)
+
+    # Compute similarities and rewards
     rewards = []
-    for completion, answer in zip(completions, answers):
-        response = completion[0]['content']
-        extracted = extract_content(response, "answer") or response.split("</think>")[-1].strip()
-        embeds = embedding_model.encode([extracted, answer], convert_to_tensor=True)
-        rewards.append(util.pytorch_cos_sim(embeds[0], embeds[1]).item() * 2)
+    for resp_emb in response_embeddings:
+        sim = util.pytorch_cos_sim(resp_emb.unsqueeze(0), answer_embedding).item()
+        rewards.append(sim * 2)
+
+    print('-'*20)
+    print(f"Question:\n{q}")
+    print(f"\nAnswer:\n{extracted_answer}")
+    print(f"\nResponse:\n{extracted_responses[0]}")
+    print(f"\nSimilarity Score: {rewards[0]/2:.4f}")
+    print(f"Reward: {rewards[0]:.4f}")
+
     return rewards
-
-# Modified to accept the prompts parameter and extra kwargs
-def format_reward(prompts, completions, pattern, **kwargs):
-    return [0.5 if re.search(pattern, c[0]["content"], re.DOTALL) else 0.0 for c in completions]
-
-# Modified to accept the prompts parameter and extra kwargs
-def int_reward(prompts, completions, **kwargs):
-    return [0.5 if extract_content(c[0]["content"], "answer").isdigit() else 0.0 for c in completions]
 
 # --- Training Setup ---
 def get_trainer(model, tokenizer, dataset):
@@ -90,37 +103,32 @@ def get_trainer(model, tokenizer, dataset):
         model=model,
         processing_class=tokenizer,
         reward_funcs=[
-            # Fixed lambda functions to properly pass prompts parameter
-            lambda prompts, completions, **kwargs: format_reward(prompts, completions, r"<reasoning>.*?</reasoning>\s*<answer>.*?</answer>"),
-            lambda prompts, completions, **kwargs: format_reward(prompts, completions, r"<think>.*?</think>.*"),
-            lambda prompts, completions, **kwargs: int_reward(prompts, completions),
-            correctness_reward,
+            correctness_reward_func
         ],
         args=GRPOConfig(
-          use_vllm = True, # use vLLM for fast inference!
-          learning_rate = 5e-6,
-          adam_beta1 = 0.9,
-          adam_beta2 = 0.99,
-          weight_decay = 0.1,
-          warmup_ratio = 0.1,
-          lr_scheduler_type = "cosine",
-          optim = "adamw_8bit",
-          logging_steps = 1,
-          bf16 = is_bfloat16_supported(),
-          fp16 = not is_bfloat16_supported(),
-          per_device_train_batch_size = 8,
-          gradient_accumulation_steps = 4, # Increase to 4 for smoother training
-          num_generations = 8, # Decrease if out of memory
-          max_prompt_length = 512,
-          max_completion_length = MAX_SEQ_LENGTH - 512,
-          # num_train_epochs = 1, # Set to 1 for a full training run
-          max_steps = 400,
-          save_steps = 400,
-          max_grad_norm = 0.1,
-          report_to = "none", # Can use Weights & Biases
-          output_dir = "outputs",
+            use_vllm = True,                             # Enable faster inference using vLLM
+            learning_rate = 5e-6,                        # Small learning rate for stable training
+            adam_beta1 = 0.9,                            # AdamW optimizer momentum parameter
+            adam_beta2 = 0.99,                           # AdamW optimizer second moment parameter
+            weight_decay = 0.1,                          # L2 regularization to prevent overfitting
+            warmup_ratio = 0.1,                          # Portion of training steps for learning rate warmup
+            lr_scheduler_type = "cosine",                # Learning rate decay schedule type
+            optim = "adamw_8bit",                        # Use 8-bit AdamW optimizer for memory efficiency
+            logging_steps = 1,                           # Log metrics every step
+            bf16 = is_bfloat16_supported(),              # Use bfloat16 if hardware supports it
+            fp16 = not is_bfloat16_supported(),          # Fallback to float16 if bfloat16 not supported
+            per_device_train_batch_size = 1,             # Number of prompts per GPU
+            gradient_accumulation_steps = 4,             # Number of steps to accumulate gradients
+            num_generations = 8,                         # Number of responses to generate per prompt for GRPO
+            max_prompt_length = 256,                     # Maximum length of input prompts in tokens
+            max_completion_length = MAX_SEQ_LENGTH - 256, # Maximum length of model responses in tokens
+            max_steps = 2000,                           # Total number of training steps
+            save_steps = 250,                           # Save checkpoint every 250 steps
+            max_grad_norm = 0.1,                        # Gradient clipping threshold
+            report_to = "none",                         # Log metrics to Weights & Biases
+            output_dir = "outputs",                     # Directory to save model checkpoints
         ),
-        train_dataset=dataset,  
+        train_dataset=dataset,
     )
 
 # --- Main Execution ---
@@ -132,7 +140,7 @@ if __name__ == "__main__":
 
     # 2. Initialize model and tokenizer
     print("Loading model and tokenizer...")
-    model, tokenizer = load_model()
+    model, tokenizer, model = load_model()
 
     # 3. Initialize trainer
     print("Initializing trainer...")
@@ -144,24 +152,27 @@ if __name__ == "__main__":
 
     # 5. Save trained LoRA weights
     print("Saving LoRA adapter...")
-    model.save_lora("trained_lora")
+    model.save_lora("ml_assistant_lora")
 
     # 6. Demo inference comparisons
     def run_inference(question, lora=None):
         prompt = tokenizer.apply_chat_template(
-            [{"role": "user", "content": question}],
-            tokenize=False,
-            add_generation_prompt=True
-        )
+                [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": question}
+                ],
+                tokenize=False,
+                add_generation_prompt=True
+                )
         return model.fast_generate(
-            [prompt],
-            sampling_params=SamplingParams(
-                temperature=0.8,
-                top_p=0.95,
-                max_tokens=1024,
-            ),
-            lora_request=model.load_lora(lora) if lora else None,
-        )[0].outputs[0].text
+                [prompt],
+                sampling_params=SamplingParams(
+                    temperature=0.8,
+                    top_p=0.95,
+                    max_tokens=1024,
+                    ),
+                lora_request=model.load_lora(lora) if lora else None,
+                )[0].outputs[0].text
 
     test_question = "How many r's are in strawberry?"
 
@@ -169,12 +180,15 @@ if __name__ == "__main__":
     print(run_inference(test_question))
 
     print("\n=== Post-training Response ===")
-    print(run_inference(test_question, "trained_lora"))
+    print(run_inference(test_question, "ml_assistant_lora"))
 
-    # 7. Optional: Save full model
-    model.push_to_hub_gguf(
-        "densud2/ML-assistant",
-        tokenizer,
-        quantization_method = ["q4_k_m", "q8_0", "q5_k_m",],
-        token = os.environ["HF_TOKEN"],
-    )
+    # 7. Optional: Save model to HuggingFace
+    if "HG_TOKEN" in os.environ:
+        model.push_to_hub_gguf(
+                "densud2/ML-researcher",
+                tokenizer,
+                quantization_method = ["q4_k_m", "q8_0", "q5_k_m"],
+                token = os.environ["HG_TOKEN"],
+                )
+    else:
+        print("HG_TOKEN environment variable not found. Skipping HuggingFace upload.")

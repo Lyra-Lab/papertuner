@@ -28,7 +28,7 @@ dependencies = [
     "datasets==3.4.1",
     "sentence-transformers==3.4.1",
     "trl==0.15.2",
-    "vllm==0.8.1",
+    "vllm",
     # Unsloth is conditionally handled below
 ]
 

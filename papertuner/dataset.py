@@ -81,7 +81,7 @@ class ResearchPaperProcessor:
                 with open(processed_file, 'r') as f:
                     data = json.load(f)
                     # Check for the new structure with multiple QA pairs
-                    if (data.get("metadata") and data.get("sections") and
+                    if (data.get("metadata") and
                         (data.get("qa_pairs") or data.get("qa"))):
                         logger.info(f"Paper {paper_id} already processed. Skipping.")
                         return True
@@ -154,118 +154,23 @@ class ResearchPaperProcessor:
             logger.error(f"Unexpected error extracting text: {str(e)}")
             return ""
 
-    def extract_sections(self, text):
-        """
-        Extract key sections from research paper text.
-
-        Args:
-            text: Full text of the paper
-
-        Returns:
-            dict: Extracted sections (problem, methodology, results)
-        """
-        try:
-            # Problem/Introduction patterns
-            problem_patterns = [
-                r"(?:INTRODUCTION|BACKGROUND|PROBLEM STATEMENT|MOTIVATION|OVERVIEW).*?(?=\n\n[A-Z][A-Z\s]+\n)",
-                r"(?:1[\.\s]+INTRODUCTION|1[\.\s]+BACKGROUND|I[\.\s]+INTRODUCTION).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
-                r"(?:\n\nIntroduction\n|\n\nBackground\n|\n\nMotivation\n).*?(?=\n\n[A-Z][a-z])"
-            ]
-
-            # Methodology patterns
-            method_patterns = [
-                r"(?:METHODOLOGY|METHOD|APPROACH|EXPERIMENTAL DESIGN|PROPOSED METHOD|MODEL ARCHITECTURE|SYSTEM DESIGN|NETWORK ARCHITECTURE|IMPLEMENTATION|PROPOSED APPROACH).*?(?=\n\n[A-Z][A-Z\s]+\n)",
-                r"(?:[2-4][\.\s]+(?:METHODOLOGY|METHOD|APPROACH|PROPOSED|MODEL|ARCHITECTURE)).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
-                r"(?:\n\nMethodology\n|\n\nMethod\n|\n\nApproach\n|\n\nProposed method\n|\n\nArchitecture\n|\n\nModel\n|\n\nImplementation\n).*?(?=\n\n[A-Z][a-z])"
-            ]
-
-            # Results patterns
-            result_patterns = [
-                r"(?:RESULTS|EVALUATION|FINDINGS|EXPERIMENTS|EXPERIMENTAL RESULTS|PERFORMANCE|EVALUATION RESULTS).*?(?=\n\n[A-Z][A-Z\s]+\n)",
-                r"(?:[3-6][\.\s]+(?:RESULTS|EVALUATION|EXPERIMENTS|PERFORMANCE)).*?(?=\n\n[0-9]+[\.\s]+[A-Z]|\n\n[I|V|X]+[\.\s]+[A-Z])",
-                r"(?:\n\nResults\n|\n\nEvaluation\n|\n\nExperiments\n|\n\nPerformance\n|\n\nExperimental results\n).*?(?=\n\n[A-Z][a-z])"
-            ]
-
-            # Try all patterns for each section type
-            problem_text = ""
-            for pattern in problem_patterns:
-                match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-                if match:
-                    problem_text = match.group(0)
-                    break
-
-            method_text = ""
-            for pattern in method_patterns:
-                match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-                if match:
-                    method_text = match.group(0)
-                    break
-
-            result_text = ""
-            for pattern in result_patterns:
-                match = re.search(pattern, text, re.DOTALL | re.IGNORECASE)
-                if match:
-                    result_text = match.group(0)
-                    break
-
-            # If we still don't have the methodology section, try a fallback approach
-            if not method_text:
-                # Look for sections that might contain methodology information
-                method_related_keywords = [
-                    "architecture", "network", "model", "algorithm", "framework",
-                    "implementation", "system", "approach", "design", "experiment"
-                ]
-
-                # Search for paragraphs with methodology-related content
-                paragraphs = re.split(r'\n\n+', text)
-                method_paragraphs = []
-
-                for paragraph in paragraphs:
-                    # Check if paragraph is likely about methodology
-                    if any(keyword in paragraph.lower() for keyword in method_related_keywords):
-                        if len(paragraph) > 100:  # Only include substantial paragraphs
-                            method_paragraphs.append(paragraph)
-
-                if method_paragraphs:
-                    method_text = "\n\n".join(method_paragraphs[:3])  # Limit to first few relevant paragraphs
-
-            # If we identified any sections, return them
-            sections = {
-                "problem": problem_text.strip(),
-                "methodology": method_text.strip(),
-                "results": result_text.strip()
-            }
-
-            # Log which sections were found
-            found_sections = [k for k, v in sections.items() if v]
-            if found_sections:
-                logger.info(f"Extracted sections: {', '.join(found_sections)}")
-            else:
-                logger.warning("No sections extracted from paper")
-
-            return sections
-
-        except Exception as e:
-            logger.error(f"Error extracting core sections: {e}")
-            return {}
-
-    def generate_qa(self, paper_data, sections, num_pairs=3):
+    def generate_qa(self, paper_data, full_text, num_pairs=3): # Pass full_text instead of sections
         """
         Generate multiple QA pairs from a paper using structured output.
 
         Args:
             client: Google GenAI client instance
             paper_data: Metadata about the paper
-            sections: Extracted paper sections
+            full_text: The text content of the paper
             num_pairs: Number of QA pairs to generate
 
         Returns:
             list: Generated QA pairs or None if generation fails
         """
         abstract = paper_data.get("abstract", "")
-        problem = sections.get("problem", "")
-        methodology = sections.get("methodology", "")
-        results = sections.get("results", "")
+        # Removed: problem = sections.get("problem", "")
+        # Removed: methodology = sections.get("methodology", "")
+        # Removed: results = sections.get("results", "")
 
         # Extract key information about the paper
         paper_domain = paper_data.get("categories", [""])[0]
@@ -276,26 +181,17 @@ class ResearchPaperProcessor:
     Title: {paper_title}
     Domain: {paper_domain}
     Abstract: {abstract}
+    Full Text: {full_text[:5000]}...
     """
-
-        if problem:
-            context += f"\nProblem/Introduction: {problem[:500]}...\n"
-        if methodology:
-            context += f"\nMethodology/Approach: {methodology[:1000]}...\n"
-        if results:
-            context += f"\nResults: {results[:300]}...\n"
-
-        # Limit number of pairs to a reasonable maximum
-        num_requested_pairs = min(num_pairs, 5)
 
         prompt = f"""You are an expert research advisor helping fellow researchers deeply understand complex research papers.  Your goal is to generate questions that promote critical thinking and reasoning about the paper's technical contributions.
 
-    Based on this research paper, create {num_requested_pairs} DISTINCT technical research questions and detailed answers that go beyond simple factual recall. Focus on questions that require reasoning and inference.
+    Based on this research paper, create {num_pairs} DISTINCT technical research questions and detailed answers that go beyond simple factual recall. Focus on questions that require reasoning and inference.
 
     {context}
 
     Your task is to:
-    1. Create {num_requested_pairs} substantive question-answer pairs that necessitate reasoning and deeper understanding of the research methodology, approach, and findings.
+    1. Create {num_pairs} substantive question-answer pairs that necessitate reasoning and deeper understanding of the research methodology, approach, and findings.
     2. Ensure each question encourages analytical thinking and is not answerable by simple fact retrieval or general knowledge.
     3. Prioritize questions that explore the 'how' and 'why' behind the research, focusing on underlying mechanisms, relationships, and implications.
     4. Aim for questions that a researcher would genuinely ask to critically evaluate and understand the nuances of the paper.
@@ -316,7 +212,7 @@ class ResearchPaperProcessor:
 
     Avoid questions that are purely about factual recall or can be answered with general background knowledge. Focus on questions that require reasoning based on the specific details and arguments presented in the paper."""
 
-        
+
         class QuestionCategory(str, Enum):
             ARCHITECTURE = "Architecture & Design"
             IMPLEMENTATION = "Implementation Strategy & Techniques"
@@ -402,20 +298,8 @@ class ResearchPaperProcessor:
             "pdf_url": paper.pdf_url
         }
 
-        # Extract sections
-        sections = self.extract_sections(text)
-
-        # Use fallback if we couldn't extract proper sections
-        if not sections.get("methodology") and not sections.get("problem"):
-            sections = {
-                "problem": paper_data["abstract"],
-                "methodology": text[:2000] if len(text) > 2000 else text,
-                "results": text[-1000:] if len(text) > 3000 else ""
-            }
-            logger.info(f"Using abstract and text excerpts for paper {paper.entry_id} due to missing sections.")
-
         # Generate multiple QA pairs
-        qa_pairs = self.generate_qa(paper_data, sections, num_pairs=3)
+        qa_pairs = self.generate_qa(paper_data, text, num_pairs=3) # Pass 'text' not 'sections'
         if not qa_pairs:
             logger.warning(f"Skipping paper {paper.entry_id} due to failure to generate quality QA pairs.")
             return None
@@ -427,8 +311,7 @@ class ResearchPaperProcessor:
                 "title": paper_data["title"],
                 "categories": paper_data["categories"]
             },
-            "sections": sections,  # Keep the sections for reference
-            "qa_pairs": qa_pairs
+            "qa_pairs": qa_pairs # No sections anymore
         }
 
         # Clean up the temp PDF

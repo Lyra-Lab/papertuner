@@ -40,33 +40,75 @@ papertuner-train --model "Qwen/Qwen2.5-3B-Instruct" --dataset "densud2/ml_qa_dat
 
 ### As a Python Library
 
+Here's a complete example of creating a specialized biology research model:
+
 ```python
 from papertuner import ResearchPaperProcessor, ResearchAssistantTrainer
 
-# Create a dataset
+# 1. Create a dataset from biology papers
 processor = ResearchPaperProcessor(
-    api_key="your-api-key",
-    hf_repo_id="your-username/dataset-name"
+    api_key="your-gemini-api-key",
+    hf_repo_id="your-username/bio-research-qa"
 )
-papers = processor.process_papers(max_papers=10)
 
-# Train a model
+# Use a biology-focused search query
+bio_query = " OR ".join([
+    "molecular biology",
+    "cell biology",
+    "genetics",
+    "biochemistry",
+    "systems biology",
+    "synthetic biology",
+    "bioinformatics",
+    "genomics",
+    "proteomics",
+    "metabolomics"
+])
+
+# Process papers and create dataset
+papers = processor.process_papers(
+    max_papers=100,
+    search_query=bio_query,
+    clear_processed_data=True  # Start fresh
+)
+
+# 2. Train a specialized model
 trainer = ResearchAssistantTrainer(
-    model_name="Qwen/Qwen2.5-3B-Instruct",
+    model_name="Qwen/Qwen2.5-3B-Instruct",  # Base model
     lora_rank=64,
-    output_dir="./model_output"
-)
-results = trainer.train("your-username/dataset-name")
+    output_dir="./bio_model",
+    system_prompt="""You are a biology research assistant. Follow this format:
+<think>
+Analyze the biological research question step-by-step, considering:
+- Relevant biological mechanisms
+- Experimental approaches
+- Key methodological considerations
+- Potential limitations
+</think>
 
-# Test the model
-question = "How would you design a transformer model for time series forecasting?"
-response = trainer.run_inference(
-    results["model"],
-    results["tokenizer"],
-    question,
-    results["lora_path"]
+Provide a clear, scientifically-grounded answer that explains both the 'how' and 'why'
+of the biological approach or method."""
 )
-print(response)
+
+# Train the model
+results = trainer.train("your-username/bio-research-qa")
+
+# 3. Test the model with biology questions
+questions = [
+    "How would you design a CRISPR experiment to study gene function in mammalian cells?",
+    "What approaches can be used to study protein-protein interactions in vivo?",
+    "How would you analyze single-cell RNA sequencing data to identify cell types?"
+]
+
+for question in questions:
+    response = trainer.run_inference(
+        results["model"],
+        results["tokenizer"],
+        question,
+        results["lora_path"]
+    )
+    print(f"\nQ: {question}")
+    print(f"A: {response}\n")
 ```
 
 ## Configuration

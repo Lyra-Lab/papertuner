@@ -57,8 +57,7 @@ class ResearchPaperProcessor:
         self.hf_repo_id = hf_repo_id
 
         # Initialize Google GenAI client
-        genai.configure(api_key=self.api_key) # Configure genai with API key
-        self.client = genai.GenerativeModel(model_name='gemini-2.0-flash') # Initialize GenerativeModel
+        self.client = genai.Client(api_key=self.api_key) # Initialize GenerativeModel
 
         # Create directories
         setup_dirs()
@@ -255,6 +254,7 @@ class ResearchPaperProcessor:
         Generate multiple QA pairs from a paper using structured output.
 
         Args:
+            client: Google GenAI client instance
             paper_data: Metadata about the paper
             sections: Extracted paper sections
             num_pairs: Number of QA pairs to generate
@@ -262,7 +262,61 @@ class ResearchPaperProcessor:
         Returns:
             list: Generated QA pairs or None if generation fails
         """
-        # Define Pydantic models for structured output
+        abstract = paper_data.get("abstract", "")
+        problem = sections.get("problem", "")
+        methodology = sections.get("methodology", "")
+        results = sections.get("results", "")
+
+        # Extract key information about the paper
+        paper_domain = paper_data.get("categories", [""])[0]
+        paper_title = paper_data.get("title", "")
+
+        # Prepare context
+        context = f"""
+    Title: {paper_title}
+    Domain: {paper_domain}
+    Abstract: {abstract}
+    """
+
+        if problem:
+            context += f"\nProblem/Introduction: {problem[:500]}...\n"
+        if methodology:
+            context += f"\nMethodology/Approach: {methodology[:1000]}...\n"
+        if results:
+            context += f"\nResults: {results[:300]}...\n"
+
+        # Limit number of pairs to a reasonable maximum
+        num_requested_pairs = min(num_pairs, 5)
+
+        prompt = f"""You are an expert research advisor helping fellow researchers deeply understand complex research papers.  Your goal is to generate questions that promote critical thinking and reasoning about the paper's technical contributions.
+
+    Based on this research paper, create {num_requested_pairs} DISTINCT technical research questions and detailed answers that go beyond simple factual recall. Focus on questions that require reasoning and inference.
+
+    {context}
+
+    Your task is to:
+    1. Create {num_requested_pairs} substantive question-answer pairs that necessitate reasoning and deeper understanding of the research methodology, approach, and findings.
+    2. Ensure each question encourages analytical thinking and is not answerable by simple fact retrieval or general knowledge.
+    3. Prioritize questions that explore the 'how' and 'why' behind the research, focusing on underlying mechanisms, relationships, and implications.
+    4. Aim for questions that a researcher would genuinely ask to critically evaluate and understand the nuances of the paper.
+    5. When possible, make sure each question belongs to a different category.
+
+    Each question should:
+    - Be technically specific and require reasoning to answer (not general or vague).
+    - Focus on 'how' or 'why' questions related to the approach's effectiveness, limitations, or implications.
+    - Explore underlying mechanisms, critical assumptions, or logical connections within the paper.
+    - NOT be a simple question of fact or definition that can be looked up.
+
+    Each answer should:
+    - Provide a detailed, reasoned explanation, going beyond surface-level information.
+    - Explain the 'why' and 'how' behind the observed outcomes or proposed methods.
+    - Discuss the reasoning process, potential assumptions, and implications of the answer.
+    - Address trade-offs, alternative interpretations, or limitations where relevant.
+    - Be thorough and provide a robust, reasoned response (at least 150-250 words).
+
+    Avoid questions that are purely about factual recall or can be answered with general background knowledge. Focus on questions that require reasoning based on the specific details and arguments presented in the paper."""
+
+        
         class QuestionCategory(str, Enum):
             ARCHITECTURE = "Architecture & Design"
             IMPLEMENTATION = "Implementation Strategy & Techniques"
@@ -283,74 +337,19 @@ class ResearchPaperProcessor:
         class QAOutput(BaseModel):
             qa_pairs: List[QAPair] = Field(..., description="List of question-answer pairs generated from the paper")
 
-        abstract = paper_data.get("abstract", "")
-        problem = sections.get("problem", "")
-        methodology = sections.get("methodology", "")
-        results = sections.get("results", "")
-
-        # Extract key information about the paper
-        paper_domain = paper_data.get("categories", [""])[0]
-        paper_title = paper_data.get("title", "")
-
-        # Prepare context
-        context = f"""
-Title: {paper_title}
-Domain: {paper_domain}
-Abstract: {abstract}
-"""
-
-        if problem:
-            context += f"\nProblem/Introduction: {problem[:500]}...\n"
-        if methodology:
-            context += f"\nMethodology/Approach: {methodology[:1000]}...\n"
-        if results:
-            context += f"\nResults: {results[:300]}...\n"
-
-        # Limit number of pairs to a reasonable maximum
-        num_requested_pairs = min(num_pairs, 5)
-
-        prompt = f"""You are an expert research advisor helping fellow researchers deeply understand complex research papers.  Your goal is to generate questions that promote critical thinking and reasoning about the paper's technical contributions.
-
-Based on this research paper, create {num_requested_pairs} DISTINCT technical research questions and detailed answers that go beyond simple factual recall. Focus on questions that require reasoning and inference.
-
-{context}
-
-Your task is to:
-1. Create {num_requested_pairs} substantive question-answer pairs that necessitate reasoning and deeper understanding of the research methodology, approach, and findings.
-2. Ensure each question encourages analytical thinking and is not answerable by simple fact retrieval or general knowledge.
-3. Prioritize questions that explore the 'how' and 'why' behind the research, focusing on underlying mechanisms, relationships, and implications.
-4. Aim for questions that a researcher would genuinely ask to critically evaluate and understand the nuances of the paper.
-5. When possible, make sure each question belongs to a different category.
-
-Each question should:
-- Be technically specific and require reasoning to answer (not general or vague).
-- Focus on 'how' or 'why' questions related to the approach's effectiveness, limitations, or implications.
-- Explore underlying mechanisms, critical assumptions, or logical connections within the paper.
-- NOT be a simple question of fact or definition that can be looked up.
-
-Each answer should:
-- Provide a detailed, reasoned explanation, going beyond surface-level information.
-- Explain the 'why' and 'how' behind the observed outcomes or proposed methods.
-- Discuss the reasoning process, potential assumptions, and implications of the answer.
-- Address trade-offs, alternative interpretations, or limitations where relevant.
-- Be thorough and provide a robust, reasoned response (at least 150-250 words).
-
-Avoid questions that are purely about factual recall or can be answered with general background knowledge. Focus on questions that require reasoning based on the specific details and arguments presented in the paper."""
-
         try:
             # Use structured output parsing
-            response = self.client.generate_content( # Using google genai client here
+            response = self.client.models.generate_content(
                 model="gemini-2.0-flash",
                 contents=prompt,
-                generation_config={
-                    "response_mime_type": "application/json",  # Tell the model to format the response as json
-                    "response_schema": QAOutput.schema_json(),  # Pass schema as json
+                config={
+                    'response_mime_type': 'application/json',  # Tell the model to format the response as json
+                    'response_schema': QAOutput,  # Try passing the pydantic class as response_schema
                 },
             )
 
             #  response.text is the text, and we parse it using QAOutput
-            qa_output_json_str = response.text
-            qa_output = QAOutput.parse_raw(qa_output_json_str)
+            qa_output = QAOutput.parse_raw(response.text)
 
 
             # Validate each QA pair

@@ -44,14 +44,20 @@ Here's a complete example of creating a specialized biology research model:
 
 ```python
 from papertuner import ResearchPaperProcessor, ResearchAssistantTrainer
+import os
 
-# 1. Create a dataset from biology papers
+# Set up your environment variables
+os.environ["GEMINI_API_KEY"] = "your-gemini-api-key"  # Replace with your actual API key
+os.environ["HF_TOKEN"] = "your-huggingface-token"     # Replace with your actual HF token
+
+# 1. Create a biology-focused dataset
 processor = ResearchPaperProcessor(
-    api_key="your-gemini-api-key",
-    hf_repo_id="your-username/bio-research-qa"
+    api_key=os.environ["GEMINI_API_KEY"],
+    hf_token=os.environ["HF_TOKEN"],
+    hf_repo_id="your-username/bio-research-qa"  # Replace with your desired repo name
 )
 
-# Use a biology-focused search query
+# Define a biology-focused search query
 bio_query = " OR ".join([
     "molecular biology",
     "cell biology",
@@ -62,19 +68,29 @@ bio_query = " OR ".join([
     "bioinformatics",
     "genomics",
     "proteomics",
-    "metabolomics"
+    "CRISPR"
 ])
 
-# Process papers and create dataset
+# Process biology papers and create dataset
+# This will download papers, extract text, and generate QA pairs
+print("Processing biology research papers...")
 papers = processor.process_papers(
     max_papers=100,
     search_query=bio_query,
     clear_processed_data=True  # Start fresh
 )
 
-# 2. Train a specialized model
+# Validate and push dataset to HuggingFace
+validation_results = processor.validate_dataset()
+print(f"Dataset validation - Valid entries: {validation_results['valid_entries']}/{validation_results['total_files']}")
+
+# Push the dataset to HuggingFace
+processor.push_to_hf()
+print(f"Dataset uploaded to HuggingFace: {processor.hf_repo_id}")
+
+# 2. Train a specialized biology research assistant model
 trainer = ResearchAssistantTrainer(
-    model_name="Qwen/Qwen2.5-3B-Instruct",  # Base model
+    model_name="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",  # Using the specified model
     lora_rank=64,
     output_dir="./bio_model",
     system_prompt="""You are a biology research assistant. Follow this format:
@@ -84,6 +100,7 @@ Analyze the biological research question step-by-step, considering:
 - Experimental approaches
 - Key methodological considerations
 - Potential limitations
+- Ethical considerations
 </think>
 
 Provide a clear, scientifically-grounded answer that explains both the 'how' and 'why'
@@ -91,16 +108,19 @@ of the biological approach or method."""
 )
 
 # Train the model
-results = trainer.train("your-username/bio-research-qa")
+print("Starting model training...")
+results = trainer.train("your-username/bio-research-qa")  # Use the dataset we created
+print(f"Model trained and saved to {results['lora_path']}")
 
-# 3. Test the model with biology questions
-questions = [
+# 3. Test the model with biology research questions
+test_questions = [
     "How would you design a CRISPR experiment to study gene function in mammalian cells?",
     "What approaches can be used to study protein-protein interactions in vivo?",
     "How would you analyze single-cell RNA sequencing data to identify cell types?"
 ]
 
-for question in questions:
+print("\nTesting the trained model with biology questions:")
+for question in test_questions:
     response = trainer.run_inference(
         results["model"],
         results["tokenizer"],
@@ -109,6 +129,15 @@ for question in questions:
     )
     print(f"\nQ: {question}")
     print(f"A: {response}\n")
+    print("-" * 80)
+
+# Optional: Push the trained model to HuggingFace Hub
+trainer.push_to_hf(
+    results["model"],
+    results["tokenizer"],
+    "your-username/bio-research-assistant"  # Replace with your desired model repo name
+)
+print("Model pushed to HuggingFace Hub!")
 ```
 
 ## Configuration

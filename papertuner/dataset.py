@@ -178,40 +178,39 @@ class ResearchPaperProcessor:
 
         # Prepare context
         context = f"""
-    Title: {paper_title}
-    Domain: {paper_domain}
-    Abstract: {abstract}
-    Full Text: {full_text[:5000]}...
-    """
+        Title: {paper_title}
+        Domain: {paper_domain}
+        Abstract: {abstract}
+        Full Text: {full_text[:5000]}...
+        """
+        prompt = f"""You are an expert research advisor helping assess a researcher's understanding of complex topics within a research field. Your goal is to generate questions that test general knowledge and critical thinking in the field, inspired by the discoveries and developments presented in a given research paper.  The person answering the question will likely be unfamiliar with the specific paper.
 
-        prompt = f"""You are an expert research advisor helping fellow researchers deeply understand complex research papers.  Your goal is to generate questions that promote critical thinking and reasoning about the paper's technical contributions.
+Based on the discoveries and developments described in this research paper, create {num_pairs} DISTINCT general research questions in the relevant field (e.g., biology, if the paper is in biology) and detailed answers. These questions should not be directly about the paper itself, but should use the paper's findings as a springboard to explore broader, complex topics in the field. Focus on questions that require reasoning and inference within the field, grounded in the research paper's content. **Crucially, do not generate questions or answers purely from general knowledge; all questions and answers must be rooted in and inspired by the content, discoveries, and context of the provided research paper.**
 
-    Based on this research paper, create {num_pairs} DISTINCT technical research questions and detailed answers that go beyond simple factual recall. Focus on questions that require reasoning and inference.
+{context}
 
-    {context}
+Your task is to:
+1. Create {num_pairs} substantive question-answer pairs that assess general understanding and require reasoning about complex topics within the research domain, drawing inspiration from the paper's contributions.
+2. Ensure each question encourages analytical thinking about the broader field and is not answerable by simply recalling facts from the provided paper or general knowledge alone, but requires applying the paper's insights to broader field concepts.
+3. Prioritize questions that explore the 'how' and 'why' behind broader concepts in the field, informed by the research, focusing on underlying mechanisms, relationships, and implications within the domain.
+4. Aim for questions that a researcher in the field would genuinely ponder to critically evaluate and understand complex aspects of the field, in light of the paper's advancements.
+5. When possible, make sure each question belongs to a different category within the research field.
 
-    Your task is to:
-    1. Create {num_pairs} substantive question-answer pairs that necessitate reasoning and deeper understanding of the research methodology, approach, and findings.
-    2. Ensure each question encourages analytical thinking and is not answerable by simple fact retrieval or general knowledge.
-    3. Prioritize questions that explore the 'how' and 'why' behind the research, focusing on underlying mechanisms, relationships, and implications.
-    4. Aim for questions that a researcher would genuinely ask to critically evaluate and understand the nuances of the paper.
-    5. When possible, make sure each question belongs to a different category.
+Each question should:
+- Be technically specific to the research field and require reasoning to answer within that field (not general or vague, and not specifically about the paper itself).
+- Focus on 'how' or 'why' questions related to broader concepts in the field, prompted by the paper's approach and findings.
+- Explore underlying mechanisms, critical assumptions, or logical connections within the research domain, inspired by the paper's research.
+- NOT be a simple question of fact or definition that can be looked up, or a question directly answerable from the paper, but instead require broader field knowledge informed by the paper.
 
-    Each question should:
-    - Be technically specific and require reasoning to answer (not general or vague).
-    - Focus on 'how' or 'why' questions related to the approach's effectiveness, limitations, or implications.
-    - Explore underlying mechanisms, critical assumptions, or logical connections within the paper.
-    - NOT be a simple question of fact or definition that can be looked up.
+Each answer should:
+- Provide a detailed, reasoned explanation, going beyond surface-level information and paper-specific details to address the broader field question.
+- Explain the 'why' and 'how' behind the concepts in the field, drawing upon the paper's insights as a starting point but extending to general field understanding.
+- Discuss the reasoning process, potential assumptions, and implications of the answer within the larger context of the research domain.
+- Address trade-offs, alternative interpretations, or limitations related to the field topic where relevant.
+- Be thorough and provide a robust, reasoned response (at least 150-250 words), demonstrating a good understanding of the field's complexities inspired by the paper.
 
-    Each answer should:
-    - Provide a detailed, reasoned explanation, going beyond surface-level information.
-    - Explain the 'why' and 'how' behind the observed outcomes or proposed methods.
-    - Discuss the reasoning process, potential assumptions, and implications of the answer.
-    - Address trade-offs, alternative interpretations, or limitations where relevant.
-    - Be thorough and provide a robust, reasoned response (at least 150-250 words).
-
-    Avoid questions that are purely about factual recall or can be answered with general background knowledge. Focus on questions that require reasoning based on the specific details and arguments presented in the paper."""
-
+Avoid questions that are purely about factual recall or can be answered with general background knowledge without considering the nuances and advancements suggested by the research paper. Focus on questions that require reasoning about the field, based on, but extending beyond, the specific details and arguments presented in the paper.
+"""
 
         class QuestionCategory(str, Enum):
             ARCHITECTURE = "Architecture & Design"

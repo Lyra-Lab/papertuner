@@ -6,10 +6,9 @@ import unsloth
 import torch
 from pathlib import Path
 import datasets
-from sentence_transformers import SentenceTransformer, util
-from trl import GRPOConfig, GRPOTrainer
+from trl import SFTTrainer
+from transformers import TrainingArguments
 from unsloth import FastLanguageModel, is_bfloat16_supported
-from vllm import SamplingParams
 
 from papertuner.config import (
     logger, DEFAULT_MODEL_NAME, DEFAULT_MAX_SEQ_LENGTH,
@@ -18,7 +17,7 @@ from papertuner.config import (
 )
 
 class ResearchAssistantTrainer:
-    """Handles training of research assistant models using GRPO."""
+    """Handles training of research assistant models using parameter-efficient fine-tuning."""
 
     def __init__(
         self,
@@ -34,8 +33,7 @@ class ResearchAssistantTrainer:
         max_steps=DEFAULT_TRAINING_ARGS["max_steps"],
         save_steps=DEFAULT_TRAINING_ARGS["save_steps"],
         warmup_ratio=DEFAULT_TRAINING_ARGS["warmup_ratio"],
-        num_generations=DEFAULT_TRAINING_ARGS["num_generations"],
-        use_vllm=DEFAULT_TRAINING_ARGS["use_vllm"]
+        load_in_4bit=True
     ):
         """
         Initialize the trainer with configuration.
@@ -53,8 +51,7 @@ class ResearchAssistantTrainer:
             max_steps: Maximum training steps
             save_steps: Steps between saving checkpoints
             warmup_ratio: Portion of training for LR warmup
-            num_generations: Number of generations per prompt for GRPO
-            use_vllm: Whether to use vLLM for inference
+            load_in_4bit: Whether to load model in 4-bit quantization
         """
         self.model_name = model_name
         self.max_seq_length = max_seq_length
@@ -68,340 +65,351 @@ class ResearchAssistantTrainer:
         self.max_steps = max_steps
         self.save_steps = save_steps
         self.warmup_ratio = warmup_ratio
-        self.num_generations = num_generations
-        self.use_vllm = use_vllm
-
-        # Initialize embedding model for reward function
-        self.embedding_model = SentenceTransformer('paraphrase-MiniLM-L6-v2')
+        self.load_in_4bit = load_in_4bit
 
         logger.info(f"Trainer initialized with model: {model_name}")
 
     def load_model(self):
         """Load and prepare the model with LoRA adapters using optimized settings."""
+        # Auto-detect the best dtype for the GPU
+        dtype = None  # None for auto detection
+
         model, tokenizer = FastLanguageModel.from_pretrained(
             model_name=self.model_name,
             max_seq_length=self.max_seq_length,
-            load_in_4bit=True,
-            fast_inference=self.use_vllm,
-            max_lora_rank=self.lora_rank,
-            gpu_memory_utilization=0.7,
+            dtype=dtype,
+            load_in_4bit=self.load_in_4bit,
         )
 
-        peft_model = FastLanguageModel.get_peft_model(
+        model = FastLanguageModel.get_peft_model(
             model,
             r=self.lora_rank,
             target_modules=self.target_modules,
             lora_alpha=self.lora_rank,
+            lora_dropout=0,  # Optimized setting
+            bias="none",     # Optimized setting
             use_gradient_checkpointing="unsloth",  # Enable long context finetuning
             random_state=7,  # Using the recommended random seed
+            use_rslora=False,
+            loftq_config=None
         )
 
         logger.info(f"Model loaded: {self.model_name}")
         logger.info(f"LoRA rank: {self.lora_rank}")
         logger.info(f"Max sequence length: {self.max_seq_length}")
 
-        return model, tokenizer, peft_model
+        return model, tokenizer
 
     def load_dataset(self, dataset_name):
         """Load and format the training dataset."""
         try:
             dataset = datasets.load_dataset(dataset_name, split="train")
             logger.info(f"Loaded dataset: {dataset_name} with {len(dataset)} examples")
-
-            def format_example(x):
-                return {
-                    'prompt': [
-                        {'role': 'system', 'content': self.system_prompt},
-                        {'role': 'user', 'content': x['question']}
-                    ],
-                    'answer': x['answer']
-                }
-
-            return dataset.map(format_example)
-
+            return dataset
         except Exception as e:
             logger.error(f"Failed to load dataset {dataset_name}: {e}")
             raise
 
-    def extract_answer(self, text):
-        """Extract the answer part from a response with <think> tags."""
-        return text.split("</think>")[-1].strip() if "</think>" in text else text
+    def format_prompt(self, instruction, input_text="", output_text=""):
+        """Format prompts using alpaca-style template with system prompt."""
+        # Construct a prompt template similar to alpaca format but with our system prompt
+        prompt_template = f"""<s>[INST] {self.system_prompt}
 
-    def correctness_reward_func(self, prompts, completions, answer, **kwargs):
-        """
-        Reward function based on semantic similarity to reference answer.
+### Instruction:
+{instruction}
 
-        Args:
-            prompts: Input prompts
-            completions: Model completions
-            answer: Reference answers
+### Input:
+{input_text} [/INST]
 
-        Returns:
-            list: Reward scores for each completion
-        """
-        responses = [completion[0]['content'] for completion in completions]
-        q = prompts[0][-1]['content']
+{output_text}</s>"""
+        return prompt_template
 
-        # Extract answers from responses and ground truth
-        extracted_responses = [self.extract_answer(r) for r in responses]
-        extracted_answer = self.extract_answer(answer[0])
-
-        # Compute embeddings
-        response_embeddings = self.embedding_model.encode(extracted_responses, convert_to_tensor=True)
-        answer_embedding = self.embedding_model.encode([extracted_answer], convert_to_tensor=True)
-
-        # Compute similarities and rewards
-        rewards = []
-        for resp_emb in response_embeddings:
-            sim = util.pytorch_cos_sim(resp_emb.unsqueeze(0), answer_embedding).item()
-            rewards.append(sim * 2)  # Scale similarity to range [0, 2]
-
-        # Log an example for monitoring
-        if len(rewards) > 0:
-            logger.info('-'*20)
-            logger.info(f"Question:\n{q}")
-            logger.info(f"\nReference Answer (excerpt):\n{extracted_answer[:300]}...")
-            logger.info(f"\nModel Response (excerpt):\n{extracted_responses[0][:300]}...")
-            logger.info(f"\nSimilarity Score: {rewards[0]/2:.4f}")
-            logger.info(f"Reward: {rewards[0]:.4f}")
-
-        return rewards
-
-    def get_trainer(self, model, tokenizer, dataset):
-        """Configure and create the GRPO trainer with optimized settings."""
-        return GRPOTrainer(
-            model=model,
-            processing_class=tokenizer,
-            reward_funcs=[self.correctness_reward_func],
-            args=GRPOConfig(
-                use_vllm=self.use_vllm,
-                learning_rate=self.learning_rate,
-                adam_beta1=DEFAULT_TRAINING_ARGS["adam_beta1"],
-                adam_beta2=DEFAULT_TRAINING_ARGS["adam_beta2"],
-                weight_decay=DEFAULT_TRAINING_ARGS["weight_decay"],
-                warmup_ratio=self.warmup_ratio,
-                lr_scheduler_type=DEFAULT_TRAINING_ARGS["lr_scheduler_type"],
-                optim=DEFAULT_TRAINING_ARGS["optim"],
-                logging_steps=DEFAULT_TRAINING_ARGS["logging_steps"],
-                bf16=is_bfloat16_supported(),
-                fp16=not is_bfloat16_supported(),
-                per_device_train_batch_size=self.batch_size,
-                gradient_accumulation_steps=self.gradient_accumulation_steps,
-                num_generations=self.num_generations,
-                max_prompt_length=DEFAULT_TRAINING_ARGS["max_prompt_length"],
-                max_completion_length=self.max_seq_length - DEFAULT_TRAINING_ARGS["max_prompt_length"],
-                max_steps=self.max_steps,
-                save_steps=self.save_steps,
-                max_grad_norm=DEFAULT_TRAINING_ARGS["max_grad_norm"],
-                report_to=DEFAULT_TRAINING_ARGS["report_to"],
-                output_dir=self.output_dir,
-            ),
-            train_dataset=dataset,
-        )
+    def formatting_prompts_func(self, examples):
+        """Format the dataset examples into model-compatible prompts."""
+        questions = examples["question"]
+        answers = examples["answer"]
+        texts = []
+        
+        for question, answer in zip(questions, answers):
+            # Format using our template and add EOS token to prevent infinite generation
+            text = self.format_prompt(
+                instruction=question,
+                input_text="",
+                output_text=answer
+            )
+            texts.append(text)
+            
+        return {"text": texts}
 
     def train(self, dataset_name):
-        """Run the training process end-to-end."""
-        # Ensure output directory exists
-        Path(self.output_dir).mkdir(parents=True, exist_ok=True)
-
-        # Load dataset
-        logger.info(f"Loading dataset: {dataset_name}")
-        dataset = self.load_dataset(dataset_name)
-
-        # Load model
-        logger.info(f"Loading model: {self.model_name}")
-        model, tokenizer, peft_model = self.load_model()
-
-        # Initialize trainer
-        logger.info("Setting up trainer")
-        trainer = self.get_trainer(peft_model, tokenizer, dataset)
-
-        # Run training
-        logger.info("Starting GRPO training")
-        trainer.train()
-
-        # Save trained LoRA weights
-        lora_path = Path(self.output_dir) / "final_lora"
-        logger.info(f"Saving LoRA adapter to {lora_path}")
-        peft_model.save_lora(str(lora_path))
-
-        return {
-            "model": model,
-            "tokenizer": tokenizer,
-            "peft_model": peft_model,
-            "lora_path": lora_path
-        }
+        """Train the model using SFTTrainer for parameter-efficient fine-tuning."""
+        try:
+            # 1. Load model and tokenizer
+            model, tokenizer = self.load_model()
+            
+            # 2. Load dataset
+            dataset = self.load_dataset(dataset_name)
+            
+            # 3. Format the dataset
+            formatted_dataset = dataset.map(
+                self.formatting_prompts_func,
+                batched=True,
+            )
+            
+            # 4. Configure training arguments
+            training_args = TrainingArguments(
+                per_device_train_batch_size=self.batch_size,
+                gradient_accumulation_steps=self.gradient_accumulation_steps,
+                warmup_ratio=self.warmup_ratio,
+                max_steps=self.max_steps,
+                learning_rate=self.learning_rate,
+                fp16=not is_bfloat16_supported(),
+                bf16=is_bfloat16_supported(),
+                logging_steps=1,
+                optim="adamw_8bit",
+                weight_decay=0.01,
+                lr_scheduler_type="linear",
+                save_steps=self.save_steps,
+                output_dir=self.output_dir,
+                report_to="none",  # Use "wandb" for WandB
+                seed=3407,
+            )
+            
+            # 5. Create SFT Trainer
+            trainer = SFTTrainer(
+                model=model,
+                tokenizer=tokenizer,
+                train_dataset=formatted_dataset,
+                dataset_text_field="text",
+                max_seq_length=self.max_seq_length,
+                dataset_num_proc=2,
+                packing=False,  # Can make training faster for short sequences
+                args=training_args,
+            )
+            
+            # 6. Train the model
+            logger.info("Starting training...")
+            start_gpu_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
+            trainer_stats = trainer.train()
+            
+            # 7. Log statistics
+            used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
+            used_memory_for_lora = round(used_memory - start_gpu_memory, 3)
+            
+            logger.info(f"Training completed in {trainer_stats.metrics['train_runtime']} seconds")
+            logger.info(f"Peak reserved memory: {used_memory} GB")
+            logger.info(f"Peak reserved memory for training: {used_memory_for_lora} GB")
+            
+            # 8. Save the model
+            output_path = Path(self.output_dir) / "final_model"
+            model.save_pretrained(output_path)
+            tokenizer.save_pretrained(output_path)
+            logger.info(f"Model saved to {output_path}")
+            
+            return model, tokenizer, output_path
+            
+        except Exception as e:
+            logger.error(f"Training failed: {e}")
+            raise
 
     def run_inference(self, model, tokenizer, question, lora_path=None):
-        """
-        Run inference using the trained model.
-
-        Args:
-            model: The model to use
-            tokenizer: The tokenizer
-            question: Question to answer
-            lora_path: Optional path to LoRA weights
-
-        Returns:
-            str: The model's response
-        """
-        prompt = tokenizer.apply_chat_template(
-            [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": question}
-            ],
-            tokenize=False,
-            add_generation_prompt=True
-        )
-
-        lora_request = None
-        if lora_path:
-            lora_request = model.load_lora(lora_path)
-
-        response = model.fast_generate(
-            [prompt],
-            sampling_params=SamplingParams(
-                temperature=0.8,
-                top_p=0.95,
-                max_tokens=1024,
-            ),
-            lora_request=lora_request,
-        )[0].outputs[0].text
-
-        return response
+        """Run inference with the trained model."""
+        try:
+            # Load the trained model if path is provided
+            if lora_path:
+                model, tokenizer = self.load_model()
+                model = FastLanguageModel.from_pretrained(
+                    model_path=lora_path,
+                    model=model,
+                    tokenizer=tokenizer
+                )
+            
+            # Set model to inference mode
+            FastLanguageModel.for_inference(model)
+            
+            # Format the prompt
+            prompt = self.format_prompt(instruction=question, input_text="", output_text="")
+            inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
+            
+            # Generate the response
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=512,
+                use_cache=True
+            )
+            
+            # Decode and return the response
+            result = tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
+            return result
+            
+        except Exception as e:
+            logger.error(f"Inference failed: {e}")
+            raise
 
     def demo_comparison(self, model, tokenizer, lora_path, dataset_name):
-        """
-        Run a demo comparison of model outputs before and after training.
-
-        Args:
-            model: The model
-            tokenizer: The tokenizer
-            lora_path: Path to saved LoRA weights
-            dataset_name: The name of the dataset to load questions from
-        """
-        # Load the dataset to extract test questions
-        dataset = datasets.load_dataset(dataset_name, split="train")
-        test_questions = [example['question'] for example in dataset.select(random.sample(range(len(dataset)), 3))]
-
-        for i, question in enumerate(test_questions):
-            logger.info(f"\n=== Test Question {i+1} ===")
-            logger.info(question)
-
-            logger.info("\n=== Pre-training Response ===")
-            pre_response = self.run_inference(model, tokenizer, question)
-            logger.info(pre_response)
-
-            logger.info("\n=== Post-training Response ===")
-            post_response = self.run_inference(model, tokenizer, question, lora_path)
-            logger.info(post_response)
+        """Compare base and fine-tuned model responses on sample questions."""
+        try:
+            # Load dataset for examples
+            dataset = self.load_dataset(dataset_name)
+            
+            # Get random sample
+            if len(dataset) > 0:
+                sample_indices = torch.randint(0, len(dataset), (3,)).tolist()
+                samples = [dataset[i] for i in sample_indices]
+                
+                for i, sample in enumerate(samples):
+                    question = sample["question"]
+                    reference = sample["answer"]
+                    
+                    logger.info(f"\n===== Example {i+1} =====")
+                    logger.info(f"Question: {question}")
+                    
+                    # Get fine-tuned model response
+                    ft_response = self.run_inference(model, tokenizer, question, lora_path)
+                    
+                    logger.info(f"\nReference Answer: {reference[:300]}...")
+                    logger.info(f"\nFine-tuned Model Response: {ft_response[:300]}...")
+                    logger.info("\n" + "="*30)
+                    
+        except Exception as e:
+            logger.error(f"Demo comparison failed: {e}")
+            raise
 
     def push_to_hf(self, model, tokenizer, repo_id, token=None):
-        """
-        Upload the model to Hugging Face Hub.
-
-        Args:
-            model: The model to upload
-            tokenizer: The tokenizer
-            repo_id: Hugging Face repo ID
-            token: HF API token
-        """
-        if token is None:
-            token = os.environ.get("HF_TOKEN")
-
-        if not token:
-            logger.warning("No HF_TOKEN found. Skipping upload to Hugging Face Hub.")
-            return False
-
+        """Push the trained model to Hugging Face Hub."""
         try:
-            logger.info(f"Pushing model to HuggingFace Hub: {repo_id}")
-            model.push_to_hub_gguf(
-                repo_id,
-                tokenizer,
-                quantization_method=["q4_k_m", "q8_0", "q5_k_m"],
-                token=token
+            from huggingface_hub import HfApi
+            
+            output_path = Path(self.output_dir) / "final_model"
+            
+            # Ensure model is saved
+            if not output_path.exists():
+                model.save_pretrained(output_path)
+                tokenizer.save_pretrained(output_path)
+                
+            # Push to hub
+            api = HfApi(token=token)
+            logger.info(f"Pushing model to {repo_id}...")
+            api.create_repo(repo_id=repo_id, exist_ok=True, private=True)
+            api.upload_folder(
+                folder_path=str(output_path),
+                repo_id=repo_id,
+                commit_message="Upload model with unsloth fine-tuning"
             )
-            logger.info(f"Model successfully uploaded to {repo_id}")
-            return True
+            logger.info(f"Model pushed to {repo_id}")
+            
         except Exception as e:
-            logger.error(f"Failed to upload model to HuggingFace Hub: {e}")
-            return False
+            logger.error(f"Failed to push to Hugging Face: {e}")
+            raise
 
 
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Train a research assistant model")
-
-    parser.add_argument("--model", type=str, default=DEFAULT_MODEL_NAME,
-                        help=f"Base model to fine-tune (default: {DEFAULT_MODEL_NAME})")
-    parser.add_argument("--dataset", type=str, default="densud2/ml_qa_dataset",
-                        help="Dataset to use for training")
-    parser.add_argument("--output-dir", type=str, default=DEFAULT_TRAINING_ARGS["output_dir"],
-                        help="Directory to save model outputs")
-    parser.add_argument("--lora-rank", type=int, default=DEFAULT_LORA_RANK,
-                        help=f"Rank for LoRA fine-tuning (default: {DEFAULT_LORA_RANK})")
-    parser.add_argument("--max-seq-length", type=int, default=DEFAULT_MAX_SEQ_LENGTH,
-                        help=f"Maximum sequence length (default: {DEFAULT_MAX_SEQ_LENGTH})")
-    parser.add_argument("--batch-size", type=int, default=DEFAULT_TRAINING_ARGS["per_device_train_batch_size"],
-                        help="Batch size per device")
-    parser.add_argument("--grad-accum", type=int, default=DEFAULT_TRAINING_ARGS["gradient_accumulation_steps"],
-                        help="Gradient accumulation steps")
-    parser.add_argument("--learning-rate", type=float, default=DEFAULT_TRAINING_ARGS["learning_rate"],
-                        help=f"Learning rate (default: {DEFAULT_TRAINING_ARGS['learning_rate']})")
-    parser.add_argument("--max-steps", type=int, default=DEFAULT_TRAINING_ARGS["max_steps"],
-                        help=f"Maximum training steps (default: {DEFAULT_TRAINING_ARGS['max_steps']})")
-    parser.add_argument("--push-to-hub", action="store_true",
-                        help="Push model to HuggingFace Hub")
-    parser.add_argument("--hub-repo-id", type=str, default=None,
-                        help="HuggingFace Hub repository ID")
-    parser.add_argument("--skip-demo", action="store_true",
-                        help="Skip the demo comparison after training")
-
+    
+    parser.add_argument(
+        "--model_name", 
+        type=str, 
+        default=DEFAULT_MODEL_NAME,
+        help="Base model to fine-tune"
+    )
+    parser.add_argument(
+        "--dataset_name", 
+        type=str, 
+        required=True,
+        help="Dataset name (local path or HF Hub ID)"
+    )
+    parser.add_argument(
+        "--max_seq_length", 
+        type=int, 
+        default=DEFAULT_MAX_SEQ_LENGTH,
+        help="Maximum sequence length"
+    )
+    parser.add_argument(
+        "--lora_rank", 
+        type=int, 
+        default=DEFAULT_LORA_RANK,
+        help="Rank for LoRA adaptation"
+    )
+    parser.add_argument(
+        "--output_dir", 
+        type=str, 
+        default=DEFAULT_TRAINING_ARGS["output_dir"],
+        help="Directory to save model"
+    )
+    parser.add_argument(
+        "--batch_size", 
+        type=int, 
+        default=DEFAULT_TRAINING_ARGS["per_device_train_batch_size"],
+        help="Batch size per device"
+    )
+    parser.add_argument(
+        "--gradient_accumulation_steps", 
+        type=int, 
+        default=DEFAULT_TRAINING_ARGS["gradient_accumulation_steps"],
+        help="Gradient accumulation steps"
+    )
+    parser.add_argument(
+        "--max_steps", 
+        type=int, 
+        default=DEFAULT_TRAINING_ARGS["max_steps"],
+        help="Maximum training steps"
+    )
+    parser.add_argument(
+        "--learning_rate", 
+        type=float, 
+        default=DEFAULT_TRAINING_ARGS["learning_rate"],
+        help="Learning rate"
+    )
+    parser.add_argument(
+        "--push_to_hub", 
+        action="store_true", 
+        help="Push model to HF Hub"
+    )
+    parser.add_argument(
+        "--repo_id", 
+        type=str, 
+        default=None,
+        help="HF Hub repository ID"
+    )
+    parser.add_argument(
+        "--demo", 
+        action="store_true", 
+        help="Run demo after training"
+    )
+    
     return parser.parse_args()
 
 
 def main():
-    """Main entry point for the training script."""
+    """Main entry point."""
     args = parse_args()
-
-    print("=" * 50)
-    print(f"PaperTuner: Research Assistant Model Trainer")
-    print("=" * 50)
-
+    
+    # Initialize trainer
     trainer = ResearchAssistantTrainer(
-        model_name=args.model,
+        model_name=args.model_name,
         max_seq_length=args.max_seq_length,
         lora_rank=args.lora_rank,
         output_dir=args.output_dir,
         batch_size=args.batch_size,
-        gradient_accumulation_steps=args.grad_accum,
-        learning_rate=args.learning_rate,
-        max_steps=args.max_steps
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        max_steps=args.max_steps,
+        learning_rate=args.learning_rate
     )
-
-    # Run training
-    training_results = trainer.train(args.dataset)
-
-    # Run demo comparison if not skipped
-    if not args.skip_demo:
-        trainer.demo_comparison(
-            training_results["model"],
-            training_results["tokenizer"],
-            str(training_results["lora_path"])
-        )
-
-    # Push to Hub if requested
-    if args.push_to_hf:
-        repo_id = args.hub_repo_id or f"{os.getenv('HF_USERNAME', 'user')}/ml-researcher"
-        trainer.push_to_hf(
-            training_results["model"],
-            training_results["tokenizer"],
-            repo_id
-        )
-
-    print("\n" + "=" * 50)
-    print(f"Training completed! Model saved at: {training_results['lora_path']}")
-    print("=" * 50)
+    
+    # Train the model
+    model, tokenizer, output_path = trainer.train(args.dataset_name)
+    
+    # Run demo if requested
+    if args.demo:
+        trainer.demo_comparison(model, tokenizer, output_path, args.dataset_name)
+    
+    # Push to Hugging Face Hub if requested
+    if args.push_to_hub and args.repo_id:
+        token = os.getenv("HF_TOKEN")
+        trainer.push_to_hf(model, tokenizer, args.repo_id, token)
+    
+    logger.info("Process completed successfully.")
 
 
 if __name__ == "__main__":

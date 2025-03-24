@@ -15,9 +15,7 @@ RAW_DIR = DATA_DIR / "raw_dataset"
 PROCESSED_DIR = DATA_DIR / "processed_dataset"
 
 # API configuration
-API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # Hugging Face configuration
 HF_TOKEN = os.getenv("HF_TOKEN")

@@ -7,13 +7,3 @@ This package contains functionality for:
 """
 
 __version__ = "0.1.2"
-
-# Import key classes so users can import directly from papertuner
-from papertuner.dataset import ResearchPaperProcessor
-from papertuner.train import ResearchAssistantTrainer
-
-# Export key functions and classes
-__all__ = [
-    "ResearchPaperProcessor",
-    "ResearchAssistantTrainer"
-]

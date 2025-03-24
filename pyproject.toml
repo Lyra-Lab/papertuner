@@ -22,9 +22,9 @@ dependencies = [
   "tenacity==9.0.0",
   "PyMuPDF>=1.22.0",
   "arxiv>=1.4.0",
-  "openai==1.66.3",
-  "tqdm==4.67.1",
-  "requests==2.32.3",
+  "google-genai>=1.7.0",          # Added google-generativeai dependency
+  "tqdm>=4.67.1",
+  "requests>=2.32.3",
   "datasets==3.4.1",
   "sentence-transformers==3.4.1",
   "trl>=0.15.2",

@@ -16,12 +16,13 @@ from datasets import Dataset
 from huggingface_hub import create_repo, login, HfApi
 import fitz  # PyMuPDF
 import arxiv
-from openai import OpenAI
+# from openai import OpenAI # Removed openai import
 from pydantic import BaseModel, Field
+from google import genai # Added google genai import
 
 from papertuner.config import (
     logger, RAW_DIR, PROCESSED_DIR,
-    HF_TOKEN, HF_REPO_ID, API_BASE_URL, GEMINI_API_KEY,
+    HF_TOKEN, HF_REPO_ID, GEMINI_API_KEY,
     setup_dirs
 )
 from papertuner.utils import api_call, save_json_file, validate_qa_pair
@@ -34,8 +35,7 @@ class ResearchPaperProcessor:
         self,
         raw_dir=RAW_DIR,
         processed_dir=PROCESSED_DIR,
-        api_key=GEMINI_API_KEY,
-        api_base_url=API_BASE_URL,
+        api_key=GEMINI_API_KEY, # Using GEMINI_API_KEY from config
         hf_token=HF_TOKEN,
         hf_repo_id=HF_REPO_ID
     ):
@@ -53,20 +53,17 @@ class ResearchPaperProcessor:
         self.raw_dir = Path(raw_dir)
         self.processed_dir = Path(processed_dir)
         self.api_key = api_key
-        self.api_base_url = api_base_url
         self.hf_token = hf_token
         self.hf_repo_id = hf_repo_id
 
-        # Initialize LLM client
-        self.client = OpenAI(
-            base_url=self.api_base_url,
-            api_key=self.api_key
-        )
+        # Initialize Google GenAI client
+        genai.configure(api_key=self.api_key) # Configure genai with API key
+        self.client = genai.GenerativeModel(model_name='gemini-2.0-flash') # Initialize GenerativeModel
 
         # Create directories
         setup_dirs()
 
-        logger.info("ResearchPaperProcessor initialized")
+        logger.info("ResearchPaperProcessor initialized with Google GenAI") # Updated log message
 
     def has_been_processed(self, paper_id):
         """
@@ -249,10 +246,6 @@ class ResearchPaperProcessor:
 
             return sections
 
-        except Exception as e:
-            logger.error(f"Error extracting core sections: {e}")
-            return {}
-
     def generate_qa(self, paper_data, sections, num_pairs=3):
         """
         Generate multiple QA pairs from a paper using structured output.
@@ -312,43 +305,49 @@ Abstract: {abstract}
         # Limit number of pairs to a reasonable maximum
         num_requested_pairs = min(num_pairs, 5)
 
-        prompt = f"""You are an expert research advisor helping fellow researchers understand approaches to solve challenging problems in their field.
-Based on this research paper, create {num_requested_pairs} DISTINCT technical research questions and detailed answers.
+        prompt = f"""You are an expert research advisor helping fellow researchers deeply understand complex research papers.  Your goal is to generate questions that promote critical thinking and reasoning about the paper's technical contributions.
+
+Based on this research paper, create {num_requested_pairs} DISTINCT technical research questions and detailed answers that go beyond simple factual recall. Focus on questions that require reasoning and inference.
 
 {context}
 
 Your task is to:
-1. Create {num_requested_pairs} substantive question-answer pairs about the research methodology, approach, and techniques
-2. Make sure each question belongs to a different category when possible
-3. Focus on the technical aspects that would be valuable for other researchers to understand
-4. Ensure questions and answers are domain-appropriate based on the paper's field
+1. Create {num_requested_pairs} substantive question-answer pairs that necessitate reasoning and deeper understanding of the research methodology, approach, and findings.
+2. Ensure each question encourages analytical thinking and is not answerable by simple fact retrieval or general knowledge.
+3. Prioritize questions that explore the 'how' and 'why' behind the research, focusing on underlying mechanisms, relationships, and implications.
+4. Aim for questions that a researcher would genuinely ask to critically evaluate and understand the nuances of the paper.
+5. When possible, make sure each question belongs to a different category.
 
 Each question should:
-- Be specific and technical (not general or vague)
-- Focus on "how" to approach a problem or "why" certain approaches work
-- Include relevant constraints or requirements
-- Be the type of question researchers would genuinely ask
+- Be technically specific and require reasoning to answer (not general or vague).
+- Focus on 'how' or 'why' questions related to the approach's effectiveness, limitations, or implications.
+- Explore underlying mechanisms, critical assumptions, or logical connections within the paper.
+- NOT be a simple question of fact or definition that can be looked up.
 
 Each answer should:
-- Provide clear, actionable guidance on approach or implementation
-- Explain WHY specific choices are effective (not just what to do)
-- Address tradeoffs and alternatives
-- Include technical details and practical considerations
-- Be thorough (at least 150-250 words)
-"""
+- Provide a detailed, reasoned explanation, going beyond surface-level information.
+- Explain the 'why' and 'how' behind the observed outcomes or proposed methods.
+- Discuss the reasoning process, potential assumptions, and implications of the answer.
+- Address trade-offs, alternative interpretations, or limitations where relevant.
+- Be thorough and provide a robust, reasoned response (at least 150-250 words).
+
+Avoid questions that are purely about factual recall or can be answered with general background knowledge. Focus on questions that require reasoning based on the specific details and arguments presented in the paper."""
 
         try:
             # Use structured output parsing
-            response = self.client.beta.chat.completions.parse(
-                model="gemini-2.0-flash",  # Use the appropriate model
-                messages=[
-                    {"role": "system", "content": "You help researchers understand technical approaches in scientific papers."},
-                    {"role": "user", "content": prompt}
-                ],
-                tools=[openai.pydantic_function_tool(QAOutput)]
+            response = self.client.generate_content( # Using google genai client here
+                model="gemini-2.0-flash",
+                contents=prompt,
+                generation_config={
+                    "response_mime_type": "application/json",  # Tell the model to format the response as json
+                    "response_schema": QAOutput.schema_json(),  # Pass schema as json
+                },
             )
 
-            qa_output = response.choices[0].message.tool_calls[0].function.parsed_arguments
+            #  response.text is the text, and we parse it using QAOutput
+            qa_output_json_str = response.text
+            qa_output = QAOutput.parse_raw(qa_output_json_str)
+
 
             # Validate each QA pair
             validated_pairs = []
@@ -872,7 +871,7 @@ Each answer should:
 
         except Exception as e:
             logger.error(f"Failed to upload dataset to Hugging Face Hub: {e}")
-            return False  # Indicate upload failure
+            return False
 
 def parse_args():
     """Parse command line arguments."""

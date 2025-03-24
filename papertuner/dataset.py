@@ -246,6 +246,10 @@ class ResearchPaperProcessor:
 
             return sections
 
+        except Exception as e:
+            logger.error(f"Error extracting core sections: {e}")
+            return {}
+
     def generate_qa(self, paper_data, sections, num_pairs=3):
         """
         Generate multiple QA pairs from a paper using structured output.

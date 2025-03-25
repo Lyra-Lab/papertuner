@@ -12,7 +12,7 @@ from collections import defaultdict
 import requests
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
-from datasets import Dataset
+from datasets import Dataset, load_dataset
 from huggingface_hub import create_repo, login, HfApi
 import fitz  # PyMuPDF
 import arxiv
@@ -63,6 +63,101 @@ class ResearchPaperProcessor:
         setup_dirs()
 
         logger.info("ResearchPaperProcessor initialized with Google GenAI") # Updated log message
+
+    def load_from_huggingface(self):
+        """
+        Load existing dataset from Hugging Face Hub.
+        This will download the dataset and create local paper files.
+
+        Returns:
+            dict: Information about loaded dataset
+        """
+        try:
+            logger.info(f"Loading dataset from Hugging Face: {self.hf_repo_id}")
+            
+            # Load the dataset
+            hf_dataset = load_dataset(self.hf_repo_id, split="train")
+            logger.info(f"Loaded dataset with {len(hf_dataset)} QA pairs")
+            
+            # Track unique papers and their QA pairs
+            paper_data = defaultdict(list)
+            processed_ids = set()
+            
+            # Group QA pairs by paper_id
+            for item in hf_dataset:
+                paper_id = item.get("paper_id", "")
+                if not paper_id:
+                    continue
+                
+                # Create QA pair
+                qa_pair = {
+                    "question": item.get("question", ""),
+                    "answer": item.get("answer", ""),
+                    "category": item.get("category", "General")
+                }
+                
+                # Add to paper data
+                paper_data[paper_id].append(qa_pair)
+                processed_ids.add(paper_id)
+            
+            # Create paper files and manifest items
+            manifest_items = []
+            papers_created = 0
+            
+            for paper_id, qa_pairs in paper_data.items():
+                # Skip if we don't have QA pairs for this paper
+                if not qa_pairs:
+                    continue
+                
+                # Get example QA pair for metadata
+                example_qa = hf_dataset[
+                    [i for i, item in enumerate(hf_dataset) if item.get("paper_id") == paper_id][0]
+                ]
+                
+                # Create paper data
+                paper_json = {
+                    "metadata": {
+                        "id": paper_id,
+                        "title": example_qa.get("paper_title", ""),
+                        "categories": example_qa.get("categories", [])
+                    },
+                    "qa_pairs": qa_pairs
+                }
+                
+                # Save paper file
+                filename = f"paper_{paper_id.split('/')[-1]}.json"
+                file_path = self.processed_dir / "papers" / filename
+                
+                if save_json_file(paper_json, file_path, use_temp=True):
+                    # Add to manifest
+                    manifest_item = {
+                        "id": paper_id,
+                        "filename": filename,
+                        "title": example_qa.get("paper_title", ""),
+                        "processed_date": datetime.datetime.now().isoformat()
+                    }
+                    manifest_items.append(manifest_item)
+                    papers_created += 1
+            
+            # Save manifest
+            if manifest_items:
+                manifest_path = self.processed_dir / "manifest.json"
+                save_json_file(manifest_items, manifest_path)
+                logger.info(f"Created manifest with {len(manifest_items)} papers")
+            
+            return {
+                "success": True,
+                "qa_pairs": len(hf_dataset),
+                "papers": papers_created,
+                "processed_ids": list(processed_ids)
+            }
+            
+        except Exception as e:
+            logger.error(f"Failed to load dataset from Hugging Face: {e}")
+            return {
+                "success": False,
+                "error": str(e)
+            }
 
     def has_been_processed(self, paper_id):
         """
@@ -773,7 +868,9 @@ def parse_args():
     parser.add_argument("--validate", action="store_true",
                         help="Validate the dataset and print statistics")
     parser.add_argument("--clear-processed-data", action="store_true",
-                        help="Clear all processed papers and manifest to start from scratch.") #  --force argument REMOVED
+                        help="Clear all processed papers and manifest to start from scratch.")
+    parser.add_argument("--load-from-hf", action="store_true",
+                        help="Load existing dataset from HuggingFace before processing new papers")
 
     return parser.parse_args()
 
@@ -792,20 +889,31 @@ def main():
     )
 
     # Clear processed data if requested
-    if args.clear_processed_data: # CHECK FOR THE NEW ARGUMENT
+    if args.clear_processed_data:
         print("Clearing all existing processed paper data...")
         processor.clear_processed_data()
         print("Processed data cleared.")
         print("=" * 50)
         print("Starting paper processing from scratch.")
         print("=" * 50)
-
+    
+    # Load existing dataset from HuggingFace if requested
+    if args.load_from_hf and not args.clear_processed_data:
+        print("Loading existing dataset from HuggingFace...")
+        result = processor.load_from_huggingface()
+        if result["success"]:
+            print(f"Successfully loaded {result['qa_pairs']} QA pairs from {result['papers']} papers.")
+            print("=" * 50)
+        else:
+            print(f"Failed to load dataset from HuggingFace: {result.get('error', 'Unknown error')}")
+            print("Continuing with local dataset only.")
+            print("=" * 50)
 
     # Process papers
     new_papers = processor.process_papers(
         max_papers=args.max_papers,
         search_query=args.query,
-        clear_processed_data=args.clear_processed_data # Pass clear_processed_data argument
+        clear_processed_data=args.clear_processed_data
     )
 
     if args.validate or args.upload:

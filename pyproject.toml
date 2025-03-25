@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "papertuner"
-version = "0.2.1"
+version = "0.2.22"
 authors = [{ name = "Your Name", email = "your.email@example.com" }]
 description = "A package for creating ML research assistant models through paper dataset creation and model fine-tuning"
 readme = "README.md"
@@ -22,15 +22,17 @@ dependencies = [
     "tenacity==9.0.0",
     "PyMuPDF>=1.22.0",
     "arxiv>=1.4.0",
-    "google-genai>=1.7.0",          # Added google-generativeai dependency
-    "tqdm>=4.67.1",
-    "requests>=2.32.3",
+    "google-genai==1.7.0",          # Added google-generativeai dependency
+    "tqdm==4.67.1",
+    "requests==2.32.3",
     "datasets==3.4.1",
     "sentence-transformers==3.4.1",
-    "trl>=0.15.2",
+    "trl==0.16.0",                  # Updated from >=0.15.2
     "vllm>=0.8.1",
-    "torch>=2.6.0",
-    "unsloth[cu124-torch260]",
+    "torch==2.6.0",           # Specific CUDA version
+    "unsloth==2025.3.18",           # Updated from unsloth[cu124-torch260]
+    "transformers>=4.36.2",         # Added explicit transformers version
+    "peft>=0.8.1",                  # Added peft dependency
 ]
 
 [project.urls]

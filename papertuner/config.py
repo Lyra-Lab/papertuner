@@ -22,7 +22,7 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 HF_REPO_ID = os.getenv("HF_REPO_ID", "user/ml-papers-qa")
 
 # Default training parameters
-DEFAULT_MODEL_NAME = "unsloth/Phi-4-mini-instruct-GGUF"
+DEFAULT_MODEL_NAME = "unsloth/Phi-4-mini-instruct"
 DEFAULT_MAX_SEQ_LENGTH = 1024  # Can increase for longer reasoning traces
 DEFAULT_LORA_RANK = 64  # Larger rank = smarter, but slower
 DEFAULT_TARGET_MODULES = [

@@ -6,4 +6,4 @@ This package contains functionality for:
 2. Fine-tuning language models for research assistance
 """
 
-__version__ = "0.2.22"
+__version__ = "0.2.23"

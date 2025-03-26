@@ -218,11 +218,9 @@ class ResearchAssistantTrainer:
             # Load the trained model if path is provided
             if lora_path:
                 model, tokenizer = self.load_model()
-                model = FastLanguageModel.from_pretrained(
-                    model_path=lora_path,
-                    model=model,
-                    tokenizer=tokenizer
-                )
+                # Use PeftModel to load the saved LoRA adapter weights
+                from peft import PeftModel
+                model = PeftModel.from_pretrained(model, lora_path)
             
             # Set model to inference mode
             FastLanguageModel.for_inference(model)
@@ -302,6 +300,64 @@ class ResearchAssistantTrainer:
             logger.error(f"Failed to push to Hugging Face: {e}")
             raise
 
+    def save_merged_model(self, model, tokenizer, output_path, save_method="merged_16bit"):
+        """Save the fine-tuned model in a merged format for deployment.
+        
+        Args:
+            model: The trained model
+            tokenizer: The model tokenizer
+            output_path: Path to save the merged model
+            save_method: One of "merged_16bit", "merged_4bit", or "lora"
+        """
+        try:
+            logger.info(f"Saving merged model to {output_path} using {save_method} format...")
+            
+            # Make sure model is in the right mode
+            FastLanguageModel.for_inference(model)
+            
+            # Save the model in the specified format
+            model.save_pretrained_merged(
+                output_path,
+                tokenizer,
+                save_method=save_method
+            )
+            
+            logger.info(f"Model successfully saved to {output_path}")
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Failed to save merged model: {e}")
+            raise
+            
+    def save_gguf(self, model, tokenizer, output_path, quantization_method="q8_0"):
+        """Save the fine-tuned model in GGUF format for llama.cpp deployment.
+        
+        Args:
+            model: The trained model
+            tokenizer: The model tokenizer
+            output_path: Path to save the GGUF model
+            quantization_method: Quantization method ("q8_0", "q4_k_m", "q5_k_m", etc.)
+        """
+        try:
+            logger.info(f"Saving model in GGUF format to {output_path} using {quantization_method}...")
+            
+            # Make sure model is in the right mode
+            FastLanguageModel.for_inference(model)
+            
+            # Save the model in GGUF format
+            model.save_pretrained_gguf(
+                output_path,
+                tokenizer,
+                quantization_method=quantization_method
+            )
+            
+            logger.info(f"GGUF model successfully saved to {output_path}")
+            return output_path
+            
+        except Exception as e:
+            logger.error(f"Failed to save GGUF model: {e}")
+            raise
+
 
 def parse_args():
     """Parse command line arguments."""
@@ -377,6 +433,19 @@ def parse_args():
         action="store_true", 
         help="Run demo after training"
     )
+    parser.add_argument(
+        "--export_format", 
+        type=str, 
+        choices=["lora", "merged_16bit", "merged_4bit", "gguf"],
+        default="lora",
+        help="Format to export the model (lora, merged_16bit, merged_4bit, gguf)"
+    )
+    parser.add_argument(
+        "--gguf_quantization", 
+        type=str, 
+        default="q8_0",
+        help="GGUF quantization method when export_format is gguf"
+    )
     
     return parser.parse_args()
 
@@ -399,6 +468,25 @@ def main():
     
     # Train the model
     model, tokenizer, output_path = trainer.train(args.dataset_name)
+    
+    # Save in the requested format
+    if args.export_format != "lora":
+        export_path = Path(args.output_dir) / f"model_{args.export_format}"
+        if args.export_format == "gguf":
+            export_path = trainer.save_gguf(
+                model, 
+                tokenizer, 
+                export_path, 
+                quantization_method=args.gguf_quantization
+            )
+        else:
+            export_path = trainer.save_merged_model(
+                model, 
+                tokenizer, 
+                export_path, 
+                save_method=args.export_format
+            )
+        logger.info(f"Model exported to {export_path} in {args.export_format} format")
     
     # Run demo if requested
     if args.demo:

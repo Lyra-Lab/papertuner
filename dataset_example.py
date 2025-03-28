@@ -1,5 +1,4 @@
 # example_dataset_usage.py
-import os
 from papertuner.dataset import ResearchPaperProcessor
 from papertuner.config import HF_REPO_ID  # Import HF_REPO_ID if needed for HF interaction
 

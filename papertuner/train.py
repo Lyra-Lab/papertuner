@@ -198,7 +198,7 @@ class ResearchAssistantTrainer:
             train_dataset=dataset,
         )
 
-    def train(self, dataset_name):
+    def train(self, dataset_name, push_to_hf=False, hf_username=None, hf_model_name=None, hf_token=None, bespoke_api_token=None):
         """Run the training process end-to-end."""
         # Ensure output directory exists
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
@@ -222,7 +222,36 @@ class ResearchAssistantTrainer:
         # Save trained LoRA weights
         lora_path = Path(self.output_dir) / "final_lora"
         logger.info(f"Saving LoRA adapter to {lora_path}")
-        peft_model.save_lora(str(lora_path))
+        peft_model.save_pretrained_merged(str(lora_path), tokenizer, save_method="merged_16bit")
+
+        # Conditionally push to Hugging Face Hub
+        if push_to_hf:
+            if hf_username and hf_model_name:
+                repo_id = f"{hf_username}/{hf_model_name}"
+            else:
+                logger.warning("hf_username and hf_model_name must be provided to push to Hugging Face Hub.")
+                return False
+
+            token = hf_token or os.environ.get("HF_TOKEN")
+            if not token:
+                logger.warning("No HF_TOKEN found. Skipping upload to Hugging Face Hub.")
+                return False
+
+            try:
+                logger.info(f"Pushing model to HuggingFace Hub: {repo_id}")
+                model.push_to_hub_gguf(
+                    repo_id,
+                    tokenizer,
+                    quantization_method=["q4_k_m", "q8_0", "q5_k_m"],
+                    token=token
+                )
+                logger.info(f"Model successfully uploaded to {repo_id}")
+            except Exception as e:
+                logger.error(f"Failed to upload model to HuggingFace Hub: {e}")
+
+        # Set Bespoke API token if provided
+        if bespoke_api_token:
+            self.bespoke_client = BespokeLabs(auth_token=bespoke_api_token)
 
         return {
             "model": model,
@@ -269,38 +298,6 @@ class ResearchAssistantTrainer:
 
         return response
 
-    def push_to_hf(self, model, tokenizer, repo_id, token=None):
-        """
-        Upload the model to Hugging Face Hub.
-
-        Args:
-            model: The model to upload
-            tokenizer: The tokenizer
-            repo_id: Hugging Face repo ID
-            token: HF API token
-        """
-        if token is None:
-            token = os.environ.get("HF_TOKEN")
-
-        if not token:
-            logger.warning("No HF_TOKEN found. Skipping upload to Hugging Face Hub.")
-            return False
-
-        try:
-            logger.info(f"Pushing model to HuggingFace Hub: {repo_id}")
-            model.push_to_hub_gguf(
-                repo_id,
-                tokenizer,
-                quantization_method=["q4_k_m", "q8_0", "q5_k_m"],
-                token=token
-            )
-            logger.info(f"Model successfully uploaded to {repo_id}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to upload model to HuggingFace Hub: {e}")
-            return False
-
-
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Train a research assistant model")
@@ -327,9 +324,12 @@ def parse_args():
                         help="Push model to HuggingFace Hub")
     parser.add_argument("--hub-repo-id", type=str, default=None,
                         help="HuggingFace Hub repository ID")
+    parser.add_argument("--hf-token", type=str, default=None,
+                        help="HuggingFace API token")
+    parser.add_argument("--bespoke-api-token", type=str, default=None,
+                        help="Bespoke Labs API token for the reward function")
 
     return parser.parse_args()
-
 
 def main():
     """Main entry point for the training script."""
@@ -351,20 +351,18 @@ def main():
     )
 
     # Run training
-    training_results = trainer.train(args.dataset)
-    # Push to Hub if requested
-    if args.push_to_hf:
-        repo_id = args.hub_repo_id or f"{os.getenv('HF_USERNAME', 'user')}/ml-researcher"
-        trainer.push_to_hf(
-            training_results["model"],
-            training_results["tokenizer"],
-            repo_id
-        )
+    training_results = trainer.train(
+        dataset_name=args.dataset,
+        push_to_hf=args.push_to_hub,
+        hf_username=os.getenv('HF_USERNAME'),
+        hf_model_name=args.hub_repo_id,
+        hf_token=args.hf_token,
+        bespoke_api_token=args.bespoke_api_token
+    )
 
     print("\n" + "=" * 50)
     print(f"Training completed! Model saved at: {training_results['lora_path']}")
     print("=" * 50)
-
 
 if __name__ == "__main__":
     main()

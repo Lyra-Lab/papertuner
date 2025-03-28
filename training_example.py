@@ -1,9 +1,10 @@
 from papertuner.train import ResearchAssistantTrainer
+import os
+from pathlib import Path
 
-# Example usage of the ResearchAssistantTrainer with fact-checking reward function
 if __name__ == "__main__":
     trainer = ResearchAssistantTrainer(
-        model_name="unsloth/Phi-4-mini-instruct",
+        model_name="unsloth/DeepSeek-R1-Distill-Qwen-1.5B-GGUF",
         max_seq_length=1024,
         lora_rank=64,
         output_dir="outputs",
@@ -14,23 +15,17 @@ if __name__ == "__main__":
         save_steps=100
     )
 
-    # Load dataset
-    dataset = trainer.load_dataset("densud2/ml_qa_dataset")
-
-    # Load model
-    model, tokenizer, peft_model = trainer.load_model()
-
-    # Initialize trainer
-    trainer_instance = trainer.get_trainer(peft_model, tokenizer, dataset)
-
-    # Run training
-    trainer_instance.train()
-
-    # Save trained LoRA weights
-    lora_path = Path("outputs") / "final_lora"
-    peft_model.save_lora(str(lora_path))
+    # Run training with the new train method
+    training_results = trainer.train(
+        dataset_name="densud2/ml_qa_dataset",
+        push_to_hf=True,  # Set to True if you want to push to Hugging Face
+        hf_username=os.getenv('HF_USERNAME'),
+        hf_model_name="your_model_name",  # Replace with your model name
+        hf_token="your_hf_token",  # Replace with your Hugging Face token
+        bespoke_api_token="your_bespoke_api_token"  # Replace with your Bespoke API token
+    )
 
     # Example inference
     question = "What are the key considerations for designing a neural network architecture for image classification?"
-    response = trainer.run_inference(model, tokenizer, question, lora_path=lora_path)
+    response = trainer.run_inference(training_results["model"], training_results["tokenizer"], question, lora_path=training_results["lora_path"])
     print("Model Response:", response)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "papertuner"
-version = "0.2.25"
+version = "0.2.26"
 authors = [{ name = "Your Name", email = "your.email@example.com" }]
 description = "A package for creating ML research assistant models through paper dataset creation and model fine-tuning"
 readme = "README.md"
@@ -28,10 +28,10 @@ dependencies = [
     "datasets==3.4.1",
     "sentence-transformers==3.4.1",
     "vllm>=0.8.1",
-    "torch==2.6.0",           # Specific CUDA version
+    "torch==2.6.0",                 # Specific CUDA version
     "unsloth==2025.3.18",           # Updated from unsloth[cu124-torch260]
     "transformers>=4.36.2",         # Added explicit transformers version
-    "peft==0.8.2",                   # Pin to a specific compatible version
+    "peft==0.8.2",                  # Pin to a specific compatible version
 ]
 
 [project.urls]

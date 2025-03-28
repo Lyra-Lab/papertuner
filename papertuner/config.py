@@ -29,14 +29,13 @@ DEFAULT_TARGET_MODULES = [
     "q_proj", "k_proj", "v_proj", "o_proj",
     "gate_proj", "up_proj", "down_proj",
 ]
-DEFAULT_SYSTEM_PROMPT = """You are an AI research assistant expert in scientific research methodologies.  Your task is to answer multiple-choice questions about research methods and concepts. Follow this response format:
-<think>
-First, analyze the question and all answer options (A, B, C, D).
-Determine the best answer option based on your knowledge of research methodologies.
-Briefly justify why this option is the most correct and relevant in this context.
-</think>
-
-After the think section, provide ONLY the letter of the correct answer (A, B, C, or D).
+DEFAULT_SYSTEM_PROMPT = """You are an AI research assistant expert in scientific research methodologies.
+Please respond in the following format:
+<thinking>
+(reasonning about the question here)
+...
+</thinking>
+(final answer)
 """
 
 # Default training hyperparameters
@@ -45,7 +44,7 @@ DEFAULT_TRAINING_ARGS = {
     "learning_rate": 5e-6,
     "adam_beta1": 0.9,
     "adam_beta2": 0.99,
-    "weight_decay": 0.1,
+    "weight_decay": 0.02,
     "warmup_ratio": 0.1,
     "lr_scheduler_type": "cosine",
     "optim": "adamw_8bit",
@@ -55,7 +54,7 @@ DEFAULT_TRAINING_ARGS = {
     "num_generations": 4,  # Decrease if out of memory
     "max_prompt_length": 256,
     "max_steps": 2000,
-    "save_steps": 50,
+    "save_steps": 100,
     "max_grad_norm": 0.1,
     "report_to": "none",  # Can use Weights & Biases
     "output_dir": "outputs",

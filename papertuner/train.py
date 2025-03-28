@@ -270,32 +270,6 @@ class ResearchAssistantTrainer:
 
         return response
 
-    def demo_comparison(self, model, tokenizer, lora_path, dataset_name):
-        """
-        Run a demo comparison of model outputs before and after training.
-
-        Args:
-            model: The model
-            tokenizer: The tokenizer
-            lora_path: Path to saved LoRA weights
-            dataset_name: The name of the dataset to load questions from
-        """
-        # Load the dataset to extract test questions
-        dataset = datasets.load_dataset(dataset_name, split="train")
-        test_questions = [example['question'] for example in dataset.select(random.sample(range(len(dataset)), 3))]
-
-        for i, question in enumerate(test_questions):
-            logger.info(f"\n=== Test Question {i+1} ===")
-            logger.info(question)
-
-            logger.info("\n=== Pre-training Response ===")
-            pre_response = self.run_inference(model, tokenizer, question)
-            logger.info(pre_response)
-
-            logger.info("\n=== Post-training Response ===")
-            post_response = self.run_inference(model, tokenizer, question, lora_path)
-            logger.info(post_response)
-
     def push_to_hf(self, model, tokenizer, repo_id, token=None):
         """
         Upload the model to Hugging Face Hub.
@@ -354,8 +328,6 @@ def parse_args():
                         help="Push model to HuggingFace Hub")
     parser.add_argument("--hub-repo-id", type=str, default=None,
                         help="HuggingFace Hub repository ID")
-    parser.add_argument("--skip-demo", action="store_true",
-                        help="Skip the demo comparison after training")
 
     return parser.parse_args()
 
@@ -381,15 +353,6 @@ def main():
 
     # Run training
     training_results = trainer.train(args.dataset)
-
-    # Run demo comparison if not skipped
-    if not args.skip_demo:
-        trainer.demo_comparison(
-            training_results["model"],
-            training_results["tokenizer"],
-            str(training_results["lora_path"])
-        )
-
     # Push to Hub if requested
     if args.push_to_hf:
         repo_id = args.hub_repo_id or f"{os.getenv('HF_USERNAME', 'user')}/ml-researcher"

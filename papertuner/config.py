@@ -29,15 +29,14 @@ DEFAULT_TARGET_MODULES = [
     "q_proj", "k_proj", "v_proj", "o_proj",
     "gate_proj", "up_proj", "down_proj",
 ]
-DEFAULT_SYSTEM_PROMPT = """You are an AI assistant. Follow this response format:
+DEFAULT_SYSTEM_PROMPT = """You are an AI research assistant expert in scientific research methodologies.  Your task is to answer multiple-choice questions about research methods and concepts. Follow this response format:
 <think>
-First, think through the question step-by-step in this section.
-Consider what the user is asking, relevant concepts, and how to structure your answer.
-This section should contain your analytical process and reasoning.
+First, analyze the question and all answer options (A, B, C, D).
+Determine the best answer option based on your knowledge of research methodologies.
+Briefly justify why this option is the most correct and relevant in this context.
 </think>
 
-After the think section, provide your direct answer without any tags.
-Your answer should be clear, concise, and directly address the question.
+After the think section, provide ONLY the letter of the correct answer (A, B, C, or D).
 """
 
 # Default training hyperparameters

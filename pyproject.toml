@@ -31,7 +31,7 @@ dependencies = [
     "torch==2.6.0",           # Specific CUDA version
     "unsloth==2025.3.18",           # Updated from unsloth[cu124-torch260]
     "transformers>=4.36.2",         # Added explicit transformers version
-    "peft>=0.8.1",                  # Added peft dependency
+    "peft==0.8.2",                   # Pin to a specific compatible version
 ]
 
 [project.urls]

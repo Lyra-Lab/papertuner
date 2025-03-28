@@ -36,7 +36,8 @@ class ResearchAssistantTrainer:
         save_steps=DEFAULT_TRAINING_ARGS["save_steps"],
         warmup_ratio=DEFAULT_TRAINING_ARGS["warmup_ratio"],
         num_generations=DEFAULT_TRAINING_ARGS["num_generations"],
-        use_vllm=DEFAULT_TRAINING_ARGS["use_vllm"]
+        use_vllm=DEFAULT_TRAINING_ARGS["use_vllm"],
+        bespoke_api_key=BESPOKE_API_KEY
     ):
         """
         Initialize the trainer with configuration.
@@ -71,7 +72,8 @@ class ResearchAssistantTrainer:
         self.warmup_ratio = warmup_ratio
         self.num_generations = num_generations
         self.use_vllm = use_vllm
-        self.bespoke_client = BespokeLabs(auth_token=BESPOKE_API_KEY)
+        self.bespoke_api_key = bespoke_api_key
+        self.bespoke_client = BespokeLabs(auth_token=self.bespoke_api_key)
 
         logger.info(f"Trainer initialized with model: {model_name}")
 
@@ -198,7 +200,7 @@ class ResearchAssistantTrainer:
             train_dataset=dataset,
         )
 
-    def train(self, dataset_name, push_to_hf=False, hf_username=None, hf_model_name=None, hf_token=None, bespoke_api_token=None):
+    def train(self, dataset_name, push_to_hf=False, hf_username=None, hf_model_name=None, hf_token=None):
         """Run the training process end-to-end."""
         # Ensure output directory exists
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
@@ -248,10 +250,6 @@ class ResearchAssistantTrainer:
                 logger.info(f"Model successfully uploaded to {repo_id}")
             except Exception as e:
                 logger.error(f"Failed to upload model to HuggingFace Hub: {e}")
-
-        # Set Bespoke API token if provided
-        if bespoke_api_token:
-            self.bespoke_client = BespokeLabs(auth_token=bespoke_api_token)
 
         return {
             "model": model,

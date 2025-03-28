@@ -18,20 +18,22 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
+    # Common
     "huggingface_hub==0.29.3",
+    "datasets==3.4.1",
+    # For dataset creation
     "tenacity==9.0.0",
     "PyMuPDF>=1.22.0",
     "arxiv>=1.4.0",
-    "google-genai==1.7.0",          # Added google-generativeai dependency
+    "google-genai==1.7.0", # Added google-generativeai dependency
     "tqdm==4.67.1",
     "requests==2.32.3",
-    "datasets==3.4.1",
-    "sentence-transformers==3.4.1",
-    "vllm>=0.8.1",
-    "torch==2.6.0",                 # Specific CUDA version
-    "unsloth==2025.3.18",           # Updated from unsloth[cu124-torch260]
-    "transformers>=4.36.2",         # Added explicit transformers version
-    "peft==0.8.2",                  # Pin to a specific compatible version
+    # For training
+    "vllm==0.8.2",
+    "torch==2.6.0",         # Specific CUDA version
+    "unsloth==2025.3.19",   # Updated from unsloth[cu124-torch260]
+    "transformers==4.36.2", # Added explicit transformers version
+    "trl==0.15.2",
 ]
 
 [project.urls]

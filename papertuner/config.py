@@ -16,6 +16,7 @@ PROCESSED_DIR = DATA_DIR / "processed_dataset"
 
 # API configuration
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+BESPOKE_API_KEY = os.getenv("BESPOKE_API_KEY")
 
 # Hugging Face configuration
 HF_TOKEN = os.getenv("HF_TOKEN")

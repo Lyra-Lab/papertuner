@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "papertuner"
-version = "0.2.26"
+version = "0.2.27"
 authors = [{ name = "Your Name", email = "your.email@example.com" }]
 description = "A package for creating ML research assistant models through paper dataset creation and model fine-tuning"
 readme = "README.md"

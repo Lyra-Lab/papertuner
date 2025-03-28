@@ -10,11 +10,12 @@ from sentence_transformers import SentenceTransformer, util
 from trl import GRPOConfig, GRPOTrainer
 from unsloth import FastLanguageModel, is_bfloat16_supported
 from vllm import SamplingParams
+from bespokelabs import BespokeLabs
 
 from papertuner.config import (
     logger, DEFAULT_MODEL_NAME, DEFAULT_MAX_SEQ_LENGTH,
     DEFAULT_LORA_RANK, DEFAULT_SYSTEM_PROMPT, DEFAULT_TARGET_MODULES,
-    DEFAULT_TRAINING_ARGS
+    DEFAULT_TRAINING_ARGS, BESPOKE_API_KEY
 )
 
 class ResearchAssistantTrainer:
@@ -70,9 +71,7 @@ class ResearchAssistantTrainer:
         self.warmup_ratio = warmup_ratio
         self.num_generations = num_generations
         self.use_vllm = use_vllm
-
-        # Initialize embedding model for reward function
-        self.embedding_model = SentenceTransformer('paraphrase-MiniLM-L6-v2')
+        self.bespoke_client = BespokeLabs(auth_token=BESPOKE_API_KEY)
 
         logger.info(f"Trainer initialized with model: {model_name}")
 
@@ -129,7 +128,7 @@ class ResearchAssistantTrainer:
 
     def correctness_reward_func(self, prompts, completions, answer, **kwargs):
         """
-        Reward function based on semantic similarity to reference answer.
+        Reward function based on fact-checking the model's completions.
 
         Args:
             prompts: Input prompts
@@ -146,15 +145,15 @@ class ResearchAssistantTrainer:
         extracted_responses = [self.extract_answer(r) for r in responses]
         extracted_answer = self.extract_answer(answer[0])
 
-        # Compute embeddings
-        response_embeddings = self.embedding_model.encode(extracted_responses, convert_to_tensor=True)
-        answer_embedding = self.embedding_model.encode([extracted_answer], convert_to_tensor=True)
-
-        # Compute similarities and rewards
         rewards = []
-        for resp_emb in response_embeddings:
-            sim = util.pytorch_cos_sim(resp_emb.unsqueeze(0), answer_embedding).item()
-            rewards.append(sim * 2)  # Scale similarity to range [0, 2]
+        for resp in extracted_responses:
+            # Fact-check the response
+            factcheck_response = self.bespoke_client.minicheck.factcheck.create(
+                claim=resp,
+                context=q + " " + extracted_answer
+            )
+            support_prob = factcheck_response.support_prob
+            rewards.append(support_prob)
 
         # Log an example for monitoring
         if len(rewards) > 0:
@@ -162,7 +161,7 @@ class ResearchAssistantTrainer:
             logger.info(f"Question:\n{q}")
             logger.info(f"\nReference Answer (excerpt):\n{extracted_answer[:300]}...")
             logger.info(f"\nModel Response (excerpt):\n{extracted_responses[0][:300]}...")
-            logger.info(f"\nSimilarity Score: {rewards[0]/2:.4f}")
+            logger.info(f"\nSupport Probability: {rewards[0]:.4f}")
             logger.info(f"Reward: {rewards[0]:.4f}")
 
         return rewards

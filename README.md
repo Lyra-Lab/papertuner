@@ -1,3 +1,122 @@
+# PaperTuner: Research Assistant Model Toolkit
+
+## Overview
+PaperTuner is a Python toolkit for creating high-quality research methodology QA datasets from scientific papers and fine-tuning large language models (LLMs) to serve as research assistants. It automates the extraction of technical Q&A pairs from research papers, validates them, and provides tools for training and evaluating custom research assistant models.
+
+## Features
+- **Automated Dataset Creation:** Extracts and validates question-answer pairs from research papers (PDFs, arXiv, etc.)
+- **Custom Model Training:** Fine-tunes LLMs (e.g., Phi, Qwen) for research methodology Q&A
+- **Hugging Face Integration:** Load and push datasets/models to the Hugging Face Hub
+- **Dataset Validation & Statistics:** Ensures QA quality and provides dataset analytics
+- **Extensible & Configurable:** Easily adapt to new domains or model architectures
+
+## Installation
+PaperTuner requires Python 3.10+ and CUDA-enabled hardware for training. Install via pip:
+
+```bash
+pip install .
+```
+Or, for development:
+```bash
+git clone https://github.com/yourusername/papertuner.git
+cd papertuner
+pip install -e .
+```
+
+## Dependencies
+Key dependencies (see `pyproject.toml` for full list):
+- `huggingface_hub`, `datasets`, `transformers`, `trl`, `torch`, `vllm`, `unsloth`
+- `PyMuPDF`, `arxiv`, `google-genai`, `tenacity`, `tqdm`, `requests`
+
+## Configuration
+Set the following environment variables for API access and Hugging Face integration:
+- `GEMINI_API_KEY` – Google Generative AI API key (for QA generation)
+- `BESPOKE_API_KEY` – Bespoke Labs API key (for fact-checking rewards)
+- `HF_TOKEN` – Hugging Face access token
+- `HF_REPO_ID` – (optional) Hugging Face dataset repo ID (default: `user/ml-papers-qa`)
+
+## Usage
+
+### 1. Dataset Creation
+Create a dataset from arXiv papers or PDFs:
+
+```python
+from papertuner.dataset import ResearchPaperProcessor
+processor = ResearchPaperProcessor()
+# Process up to 3 papers on "large language models"
+processor.process_papers(max_papers=3, search_query="large language models")
+# Validate the processed dataset
+results = processor.validate_dataset()
+print(results)
+```
+Or run the example script:
+```bash
+python dataset_example.py
+```
+
+### 2. Model Training
+Fine-tune a research assistant model on your dataset:
+
+```python
+from papertuner.train import ResearchAssistantTrainer
+trainer = ResearchAssistantTrainer(model_name="unsloth/DeepSeek-R1-Distill-Qwen-1.5B-GGUF")
+trainer.train(
+    dataset_name="your_hf_dataset_id",  # e.g., "user/ml-papers-qa"
+    push_to_hf=True,
+    hf_username="your_hf_username",
+    hf_model_name="your_model_name",
+    hf_token="your_hf_token",
+    bespoke_api_token="your_bespoke_api_token"
+)
+```
+Or run the example script:
+```bash
+python training_example.py
+```
+
+### 3. Inference
+After training, run inference with your model:
+```python
+response = trainer.run_inference(model, tokenizer, "What are the key considerations for designing a neural network architecture for image classification?")
+print(response)
+```
+
+## Dataset Format
+Each QA entry contains:
+- `question`: Technical research methodology question
+- `answer`: Detailed methodology answer
+- `category`: Question category/type (e.g., Theoretical Foundations, Architecture & Design, etc.)
+- `paper_id`: Source paper identifier
+- `paper_title`: Title of the source paper
+- `categories`: arXiv or domain categories
+
+## Question Categories
+- Theoretical Foundations
+- Architecture & Design
+- Ethical Considerations
+- Analysis & Interpretation
+- Implementation Strategy & Techniques
+- Comparative Assessment
+- Handling Specific Challenges
+- Adaptation & Transfer
+- Future Directions
+- Methodology & Approach
+
+## Command-Line Tools
+- `papertuner-dataset` – Dataset creation and processing
+- `papertuner-train` – Model training and fine-tuning
+
+## Contributing
+Contributions are welcome! Please open issues or pull requests on [GitHub](https://github.com/yourusername/papertuner).
+
+## License
+MIT License. See [LICENSE](LICENSE) for details.
+
+## Links
+- [Homepage](https://github.com/yourusername/papertuner)
+- [Bug Tracker](https://github.com/yourusername/papertuner/issues)
+- [Documentation](https://github.com/yourusername/papertuner#readme)
+
     # Research Methodology QA Dataset
 
     ## Overview
